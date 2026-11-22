@@ -9,7 +9,7 @@ const CRAB_MAX = 4;
 const TURTLE_MAX = 2;
 
 export function crabTarget() {
-  const rocks = world.terrain.filter(o => o.kind === 'rock').length;
+  const rocks = world.terrain.filter(o => o.kind === 'boulder').length;
   return clamp(Math.round(Math.min(rocks, viewArea() / 400000)), 0, CRAB_MAX);
 }
 export function turtleTarget() { return clamp(Math.round(viewArea() / 1200000), 0, TURTLE_MAX); }

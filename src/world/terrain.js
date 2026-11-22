@@ -1,48 +1,42 @@
-// 地形：礁石、洞穴、沉船残骸。
+// 地形：海底岩台（seabed shelves）。
 //
-// 所有地形都用"一串圆"来表示，碰撞就是圆vs圆，简单且稳定。
-// 洞穴是按拱形排列的圆，底部中央留一个缺口：
-// 缺口宽度固定，所以体型小的玩家能钻进去躲，大猎手进不来——洞穴是保命机制而不是装饰。
+// 石头不会凭空悬在水里。地形是一层层横向的岩台，玩家沿着它们往下潜：
+//   - 岩台横跨一片区域，中间留缺口，玩家从缺口或岩台两端下潜
+//   - 石头、珊瑚、裂缝、沉船都长在岩台顶面上
+//   - 个别层是"空窗"（整层没有岩台），留出自由下潜的空间
+//
+// 岩台按索引确定性生成（hash(n)），所以在世界坐标里是稳定的：
+// 游回去还是同一块岩台，不会因为回收/重生而跳变。
+//
+// 碰撞仍然是圆 vs 圆：每条岩台的实心段用一排圆填满。
 
-import { TAU, clamp, rand, lerp } from '../core/math.js';
-import { world, depthM } from './world.js';
-import { viewHW, viewHH, viewArea } from '../systems/view.js';
+import { TAU, clamp, hash, lerp } from '../core/math.js';
+import { world } from './world.js';
+import { viewHW, viewHH } from '../systems/view.js';
 
-const ROCK_MAX = 4;
-const CAVE_MAX = 2;
-const WRECK_MAX = 1;
+const SHELF_BASE = 330;        // 第一条岩台的深度
+const SHELF_STEP = 780;        // 岩台之间的竖向间距
+const SHELF_SPAN = 5200;       // 岩台横向跨度（超出两端就是开阔水，可以绕过去）
+const SHELF_THICK = 128;       // 基准厚度
+const CREVICE_GAP = 76;        // 裂缝宽度：小的能钻，大的进不来
 
-export function rockTarget() { return clamp(Math.round(viewArea() / 260000), 2, ROCK_MAX); }
-export function caveTarget() { return clamp(Math.round(viewArea() / 900000), 0, CAVE_MAX); }
-export function wreckTarget() {
-  // 沉船是稀有地标，越深越容易遇到
-  if (depthM() < 70) return 0;
-  return Math.random() < 0.35 ? WRECK_MAX : 0;
-}
+const shelfCache = new Map();
 
-function offscreenFar(x, y, mul = 2.2) {
-  return Math.abs(x - world.cam.x) > viewHW() * mul
-      || Math.abs(y - world.cam.y) > viewHH() * mul;
-}
+/* ---------------- 生成 ---------------- */
 
-/** 远离玩家和已有地形的位置。 */
-function pickSpot(minGap) {
-  const hw = viewHW(), hh = viewHH();
-  for (let attempt = 0; attempt < 12; attempt++) {
-    const x = world.cam.x + rand(-hw * 1.25, hw * 1.25);
-    const y = clamp(world.cam.y + rand(-hh * 1.15, hh * 1.15), 200, 30000);
-    const dp = Math.hypot(x - world.player.x, y - world.player.y);
-    if (dp < Math.max(minGap, world.player.r * 8)) continue;
-    let clash = false;
-    for (const o of world.terrain) {
-      if (Math.hypot(x - o.x, y - o.y) < (o.r + minGap) * 0.72) { clash = true; break; }
+function mergeIntervals(list) {
+  const out = [];
+  for (const [a, b] of list) {
+    if (b - a < 8) continue;
+    if (out.length && a <= out[out.length - 1][1] + 4) {
+      out[out.length - 1][1] = Math.max(out[out.length - 1][1], b);
+    } else {
+      out.push([a, b]);
     }
-    if (!clash) return { x, y };
   }
-  return null;
+  return out;
 }
 
-/** 用 AABB 缓存包住 parts，碰撞前先做廉价早退。 */
 function finalize(o) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const c of o.parts) {
@@ -55,120 +49,192 @@ function finalize(o) {
   return o;
 }
 
-export function makeRock(init) {
-  const spot = init
-    ? { x: world.cam.x + rand(-viewHW(), viewHW()), y: clamp(world.cam.y + rand(-viewHH(), viewHH()), 220, 30000) }
-    : pickSpot(200);
-  if (!spot) return null;
-
-  const r = rand(52, 118);
-  const parts = [{ x: spot.x, y: spot.y + r * 0.18, r: r * 0.78 }];
-  const lumps = 2 + ((Math.random() * 3) | 0);
-  for (let i = 0; i < lumps; i++) {
-    const a = rand(TAU);
-    const d = rand(0, r * 0.55);
-    parts.push({
-      x: spot.x + Math.cos(a) * d,
-      y: spot.y + Math.sin(a) * d * 0.6 + r * 0.1,
-      r: rand(r * 0.42, r * 0.72),
+function coralAt(seed, spread, baseY) {
+  const n = 2 + Math.floor(hash(seed + 3) * 3);
+  const list = [];
+  for (let i = 0; i < n; i++) {
+    list.push({
+      ox: (hash(seed + 10 + i) - 0.5) * spread,
+      oy: baseY + (hash(seed + 20 + i) - 0.5) * 14,
+      size: 9 + hash(seed + 30 + i) * 13,
+      hue: (hash(seed + 40 + i) * 80 + 285) % 360,
+      kind: hash(seed + 50 + i) < 0.5 ? 'fan' : 'tube',
+      ph: hash(seed + 60 + i) * TAU,
     });
   }
-
-  return finalize({
-    kind: 'rock',
-    x: spot.x, y: spot.y, r,
-    parts,
-    seed: rand(100),
-    hue: rand(196, 212),
-    lit: rand(17, 25),
-    // 石头上附着的珊瑚/海绵
-    coral: Array.from({ length: 2 + ((Math.random() * 3) | 0) }, () => ({
-      ox: rand(-r * 0.62, r * 0.62),
-      oy: rand(-r * 0.72, -r * 0.15),
-      size: rand(9, 22),
-      hue: rand(300, 372) % 360,
-      kind: Math.random() < 0.5 ? 'fan' : 'tube',
-      ph: rand(TAU),
-    })),
-  });
+  return list;
 }
 
-export function makeCave(init) {
-  const spot = init
-    ? { x: world.cam.x + rand(-viewHW() * 0.75, viewHW() * 0.75), y: clamp(world.cam.y + rand(-viewHH() * 0.65, viewHH() * 0.65), 260, 30000) }
-    : pickSpot(320);
-  if (!spot) return null;
+/**
+ * 第 n 条岩台。返回 null 表示这一层是空窗（没有任何地形）。
+ * 结果按 n 缓存，保证同一层每次拿到的是同一份几何。
+ */
+export function shelfAt(n) {
+  if (shelfCache.has(n)) return shelfCache.get(n);
 
-  // 两块巨石夹出一道竖直窄缝，缝宽固定：
-  // 玩家(直径~41)钻得进去，大猎手(直径 80+)进不来 —— 小体型时的保命点。
-  const gap = 76;
-  const cr = rand(52, 68);          // 巨石主圆半径
-  const parts = [];
+  const s = n * 7.13 + 2.71;
+  const y = SHELF_BASE + n * SHELF_STEP + (hash(s) - 0.5) * 150;
 
-  for (const side of [-1, 1]) {
-    const innerX = spot.x + side * (gap / 2 + cr);
-    parts.push({ x: innerX, y: spot.y, r: cr });
-    parts.push({ x: innerX + side * cr * 0.62, y: spot.y - cr * 0.52, r: cr * 0.78 });
-    parts.push({ x: innerX + side * cr * 0.55, y: spot.y + cr * 0.6, r: cr * 0.7 });
+  // 空窗：整层没有岩台，让下潜节奏有变化
+  if (hash(s + 0.5) < 0.17) {
+    shelfCache.set(n, null);
+    return null;
   }
 
-  return finalize({
-    kind: 'cave',
-    x: spot.x, y: spot.y, r: cr * 2.1,
-    parts,
-    gap,
-    outerR: cr * 2,
-    seed: rand(100),
-    hue: rand(200, 214),
-    lit: rand(15, 21),
-    coral: Array.from({ length: 3 + ((Math.random() * 3) | 0) }, () => ({
-      ox: rand(-cr * 1.9, cr * 1.9),
-      oy: rand(-cr * 1.1, -cr * 0.25),
-      size: rand(10, 22),
-      hue: rand(300, 372) % 360,
-      kind: Math.random() < 0.5 ? 'fan' : 'tube',
-      ph: rand(TAU),
-    })),
-  });
-}
+  const thick = SHELF_THICK * (0.75 + hash(s + 1) * 0.55);
+  const cr = thick * 0.5;
 
-export function makeWreck(init) {
-  const spot = init
-    ? { x: world.cam.x + rand(-viewHW() * 0.7, viewHW() * 0.7), y: clamp(world.cam.y + rand(-viewHH() * 0.5, viewHH() * 0.5), 300, 30000) }
-    : pickSpot(380);
-  if (!spot) return null;
-
-  const len = rand(190, 290);
-  const hullR = len * 0.16;
-  const tilt = rand(-0.5, 0.5);
-  const parts = [];
-  // 船体沿一条倾斜的轴线摆一串圆
-  const segs = 4;
-  for (let i = 0; i < segs; i++) {
-    const t = (i / (segs - 1) - 0.5) * len * 0.78;
-    parts.push({
-      x: spot.x + Math.cos(tilt) * t,
-      y: spot.y + Math.sin(tilt) * t,
-      r: hullR * (1 - Math.abs(i / (segs - 1) - 0.5) * 0.5),
+  // 缺口：2~4 个
+  const gapCount = 2 + Math.floor(hash(s + 2) * 3);
+  const gaps = [];
+  // 缺口按槽位均分（每个槽一位 + 抖动），避免全挤在一侧导致下潜要横穿整屏
+  const slotWidth = (SHELF_SPAN * 0.88) / gapCount;
+  for (let k = 0; k < gapCount; k++) {
+    const slot = (k + 0.5) / gapCount - 0.5;               // -0.5 .. 0.5
+    const jitter = (hash(s + 10 + k) - 0.5) * slotWidth * 0.45;
+    gaps.push({
+      x: slot * SHELF_SPAN * 0.88 + jitter,
+      w: 205 + hash(s + 20 + k) * 105,
     });
   }
+  gaps.sort((a, b) => a.x - b.x);
 
-  return finalize({
-    kind: 'wreck',
-    x: spot.x, y: spot.y, r: len * 0.5,
-    parts, len, tilt, hullR,
-    seed: rand(100),
-    hue: rand(30, 44),
-    lit: rand(15, 21),
-    coral: Array.from({ length: 4 + ((Math.random() * 4) | 0) }, () => ({
-      ox: rand(-len * 0.4, len * 0.4),
-      oy: rand(-hullR * 0.9, hullR * 0.2),
-      size: rand(8, 18),
-      hue: rand(300, 372) % 360,
-      kind: Math.random() < 0.5 ? 'fan' : 'tube',
-      ph: rand(TAU),
-    })),
+  // 缺口之间的实心段
+  const solids = [];
+  let cursor = -SHELF_SPAN / 2;
+  for (const g of gaps) {
+    const left = g.x - g.w / 2;
+    if (left > cursor) solids.push([cursor, left]);
+    cursor = Math.max(cursor, g.x + g.w / 2);
+  }
+  if (cursor < SHELF_SPAN / 2) solids.push([cursor, SHELF_SPAN / 2]);
+
+  const merged = mergeIntervals(solids);
+
+  const parts = [];
+  for (const [a, b] of merged) {
+    const span = b - a;
+    const count = Math.max(1, Math.ceil(span / (cr * 1.4)));
+    for (let i = 0; i <= count; i++) {
+      parts.push({ x: a + (span * i) / count, y, r: cr });
+    }
+  }
+
+  const shelf = finalize({
+    kind: 'shelf',
+    n, y, thick, cr,
+    x0: -SHELF_SPAN / 2, x1: SHELF_SPAN / 2,
+    solids: merged,
+    gaps,
+    parts,
+    seed: s,
+    hue: 202 + hash(s + 4) * 10,
+    lit: 16 + hash(s + 5) * 7,
+    coral: [],
   });
+
+  // 顶面的珊瑚。坐标统一用"相对物体"的形式，
+  // 所以这里 baseY 传相对值 (-cr + 4)，之后再整体平移到该段中心。
+  shelf.x = 0;
+  shelf.y = y;
+  for (const [a, b] of merged) {
+    if (b - a < 160) continue;
+    const spread = Math.min(b - a - 60, 900);
+    shelf.coral.push(...coralAt(s + a * 0.01, spread, -cr + 4)
+      .map(c => ({ ...c, ox: clamp(c.ox, -spread / 2, spread / 2) + (a + b) / 2 })));
+  }
+
+  /* --- 石头：坐在岩台顶面上，绝不悬空 --- */
+  const boulders = [];
+  for (const [a, b] of merged) {
+    const width = b - a;
+    if (width < 220) continue;
+    const count = 1 + Math.floor(hash(s + a * 0.013) * 2);
+    for (let i = 0; i < count; i++) {
+      const bs = s + a * 0.017 + i * 9.1;
+      const r = 46 + hash(bs) * 58;
+      const cx = lerp(a + r * 1.1, b - r * 1.1, hash(bs + 1));
+      if (b - a < r * 2.6) continue;
+      // 圆心嵌进岩台一点，看起来是从海底长出来的
+      const by = y - cr - r * 0.32;
+      const bparts = [{ x: cx, y: by, r: r * 0.92 }];
+      const lump = 2 + Math.floor(hash(bs + 2) * 3);
+      for (let k = 0; k < lump; k++) {
+        const ang = hash(bs + 3 + k) * TAU;
+        const d = hash(bs + 8 + k) * r * 0.5;
+        bparts.push({
+          x: cx + Math.cos(ang) * d,
+          y: by + Math.sin(ang) * d * 0.6 - r * 0.15,
+          r: r * (0.4 + hash(bs + 14 + k) * 0.3),
+        });
+      }
+      boulders.push(finalize({
+        kind: 'boulder',
+        x: cx, y: by, r,
+        parts: bparts,
+        seed: bs,
+        hue: 200 + hash(bs + 4) * 12,
+        lit: 17 + hash(bs + 5) * 8,
+        coral: coralAt(bs + 40, r * 1.2, -r * 0.55),
+      }));
+    }
+  }
+
+  /* --- 裂缝：两块石头夹一道缝，小的能钻、大的进不来 --- */
+  const creviceSeeds = merged.filter(([a, b]) => b - a > 420);
+  if (creviceSeeds.length && hash(s + 6) < 0.55) {
+    const [a, b] = creviceSeeds[Math.floor(hash(s + 7) * creviceSeeds.length)];
+    const cxc = lerp(a + 260, b - 260, hash(s + 8));
+    const cr2 = 54;
+    const cparts = [];
+    for (const side of [-1, 1]) {
+      const innerX = cxc + side * (CREVICE_GAP / 2 + cr2);
+      cparts.push({ x: innerX, y: y - cr2 * 0.9, r: cr2 });
+      cparts.push({ x: innerX + side * cr2 * 0.62, y: y - cr2 * 1.5, r: cr2 * 0.78 });
+      cparts.push({ x: innerX + side * cr2 * 0.5, y: y - cr2 * 0.25, r: cr2 * 0.72 });
+    }
+    boulders.push(finalize({
+      kind: 'crevice',
+      x: cxc, y: y - cr2 * 0.9, r: cr2 * 1.9,
+      parts: cparts,
+      gap: CREVICE_GAP,
+      seed: s + 9,
+      hue: 201 + hash(s + 11) * 10,
+      lit: 15 + hash(s + 12) * 6,
+      coral: coralAt(s + 60, cr2 * 3.4, -cr2 * 1.5),
+    }));
+  }
+
+  /* --- 沉船：稀有的海底地标，躺在岩台上 --- */
+  let wreck = null;
+  if (y > 1500 && hash(s + 13) < 0.3 && merged.length) {
+    const [a, b] = merged[0];
+    const len = 210 + hash(s + 14) * 90;
+    if (b - a > len * 1.3) {
+      const wx = (a + b) / 2;
+      const tilt = (hash(s + 15) - 0.5) * 0.5;
+      const hullR = len * 0.15;
+      const wy = y - cr - hullR * 0.5;
+      const wparts = [];
+      for (let i = 0; i < 4; i++) {
+        const tt = (i / 3 - 0.5) * len * 0.75;
+        wparts.push({ x: wx + Math.cos(tilt) * tt, y: wy + Math.sin(tilt) * tt, r: hullR * 0.95 });
+      }
+      wreck = finalize({
+        kind: 'wreck',
+        x: wx, y: wy, r: len * 0.5,
+        parts: wparts, len, tilt, hullR,
+        seed: s + 16,
+        hue: 34 + hash(s + 17) * 10,
+        lit: 16 + hash(s + 18) * 6,
+        coral: coralAt(s + 70, len * 0.7, -hullR * 0.4),
+      });
+    }
+  }
+
+  const result = { shelf, boulders, wreck };
+  shelfCache.set(n, result);
+  return result;
 }
 
 /* ---------------- 碰撞 ---------------- */
@@ -183,8 +249,6 @@ export function collideTerrain(px, py, pr) {
   let hit = false;
   OUT.x = px; OUT.y = py;
 
-  // 多轮迭代：两块石头夹出的凹角需要几轮才能收敛。
-  // 只做 2 轮时会被判成"一直碰撞"，法向速度被反复清零，玩家就冻住了。
   for (let pass = 0; pass < 6; pass++) {
     let moved = false;
     for (const o of world.terrain) {
@@ -197,21 +261,19 @@ export function collideTerrain(px, py, pr) {
         const d2 = dx * dx + dy * dy;
         if (d2 >= rr * rr) continue;
 
-        // 正好落在圆心上时方向是退化的，随便挑一个方向推出去，
-        // 否则会被永久卡在石头中心。
         if (d2 < 1e-6) {
           OUT.y -= rr;
-          moved = true;
-          hit = true;
+          moved = true; hit = true;
           continue;
         }
 
         const d = Math.sqrt(d2);
-        const push = (rr - d) / d;
+        // +0.02：把物体放到表面稍微外侧。否则刚好贴在表面上时，
+        // 浮点误差会让下一次检测又判成"仍然碰撞"。
+        const push = (rr - d + 0.02) / d;
         OUT.x += dx * push;
         OUT.y += dy * push;
-        moved = true;
-        hit = true;
+        moved = true; hit = true;
       }
     }
     if (!moved) break;
@@ -222,8 +284,7 @@ export function collideTerrain(px, py, pr) {
 
 /**
  * 让一个带速度的物体沿地形表面滑动。
- * 关键：只消掉"朝墙里"的法向速度分量，保留切向分量。
- * 之前直接 vx*=0.35, vy*=0.35 把切向速度也杀了，结果顶着石头干推、20 秒挪不动。
+ * 只消掉"朝墙里"的法向速度分量，保留切向分量。
  */
 export function slideAgainstTerrain(obj, radius) {
   const hit = collideTerrain(obj.x, obj.y, radius);
@@ -243,56 +304,49 @@ export function slideAgainstTerrain(obj, radius) {
   return true;
 }
 
-/* ---------------- 增删 ---------------- */
+/* ---------------- 按视野加载/卸载 ---------------- */
+
+const loaded = new Set();
 
 export function updateTerrain() {
-  const { terrain } = world;
-  for (let i = terrain.length - 1; i >= 0; i--) {
-    if (offscreenFar(terrain[i].x, terrain[i].y)) terrain.splice(i, 1);
+  const { cam, terrain } = world;
+  const top = cam.y - viewHH() * 1.5;
+  const bottom = cam.y + viewHH() * 1.7;
+
+  const first = Math.floor((top - SHELF_BASE) / SHELF_STEP) - 1;
+  const last = Math.ceil((bottom - SHELF_BASE) / SHELF_STEP) + 1;
+
+  const want = new Set();
+  for (let n = first; n <= last; n++) want.add(n);
+
+  // 卸载不再需要的层
+  for (const o of terrain) {
+    if (o.shelfIndex !== undefined && !want.has(o.shelfIndex)) {
+      terrain.splice(terrain.indexOf(o), 1);
+    }
   }
 
-  const rocks = terrain.filter(o => o.kind === 'rock').length;
-  const caves = terrain.filter(o => o.kind === 'cave').length;
-  const wrecks = terrain.filter(o => o.kind === 'wreck').length;
+  // 载入缺失的层（确定性生成 → 不会跳变）
+  for (const n of want) {
+    if (loaded.has(n)) continue;
+    loaded.add(n);
+    const data = shelfAt(n);
+    if (!data) continue;
+    data.shelf.shelfIndex = n;
+    terrain.push(data.shelf);
+    for (const b of data.boulders) { b.shelfIndex = n; terrain.push(b); }
+    if (data.wreck) { data.wreck.shelfIndex = n; terrain.push(data.wreck); }
+  }
 
-  if (rocks < rockTarget()) {
-    const o = clampBelowSurface(makeRock(terrain.length === 0));
-    if (o) terrain.push(o);
+  for (const n of [...loaded]) {
+    if (!want.has(n)) loaded.delete(n);
   }
-  if (caves < caveTarget()) {
-    const o = clampBelowSurface(makeCave(false));
-    if (o) terrain.push(o);
-  }
-  if (wrecks < wreckTarget()) {
-    const o = clampBelowSurface(makeWreck(false));
-    if (o) terrain.push(o);
-  }
-}
-
-const SURFACE_MARGIN = 185;   // 地形顶部至少要低于水面这么多
-
-/** 若地形顶部侵入水面附近，整体往下挪。否则玩家会被"水面硬边界 + 石头"夹死。 */
-function clampBelowSurface(o) {
-  if (!o) return o;
-  const shift = SURFACE_MARGIN - o.minY;
-  if (shift > 0) {
-    o.y += shift;
-    for (const c of o.parts) c.y += shift;
-    o.minY += shift;
-    o.maxY += shift;
-  }
-  return o;
 }
 
 export function resetTerrain() {
   world.terrain.length = 0;
-  const clear = o => o && Math.hypot(o.x - world.player.x, o.y - world.player.y) > world.player.r * 9;
-  for (let i = 0; i < rockTarget(); i++) {
-    const o = clampBelowSurface(makeRock(true));
-    if (clear(o)) world.terrain.push(o);
-  }
-  for (let i = 0; i < caveTarget(); i++) {
-    const o = clampBelowSurface(makeCave(true));
-    if (clear(o)) world.terrain.push(o);
-  }
+  loaded.clear();
+  updateTerrain();
 }
+
+export { SHELF_STEP, SHELF_BASE, CREVICE_GAP };

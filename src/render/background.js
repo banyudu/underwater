@@ -158,9 +158,11 @@ export function drawWater(dt) {
     }
     ctx.lineTo(W + 90, H + 100);
     ctx.closePath();
-    ctx.fillStyle = hsl(p.a[0] + 6, p.a[1] * 0.62, Math.max(3, p.a[2] * L.li), 0.97);
+    // 这两个数字压低了远景礁石的对比度：真正的海底现在是 src/world/terrain.js 里的岩台，
+    // 背景这层只该当"远处的雾山"，否则会和近处地形抢视觉。
+    ctx.fillStyle = hsl(p.a[0] + 6, p.a[1] * 0.55, Math.max(3, p.a[2] * L.li * 0.72), 0.9);
     ctx.fill();
-    ctx.strokeStyle = hsl(p.a[0] + 12, Math.min(60, p.a[1] * 0.5), Math.min(74, p.a[2] * 1.25), 0.14);
+    ctx.strokeStyle = hsl(p.a[0] + 12, Math.min(60, p.a[1] * 0.5), Math.min(74, p.a[2] * 1.25), 0.09);
     ctx.lineWidth = 1.4;
     ctx.stroke();
   }

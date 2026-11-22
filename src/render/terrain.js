@@ -1,46 +1,25 @@
-// 地形渲染：礁石、洞穴、沉船残骸，以及附着其上的珊瑚/海绵。
-// 礁石和洞穴都由"一串圆"组成，所以直接把这些圆画进同一条 path、一次 fill，
+// 地形渲染：海底岩台、礁石、裂缝、沉船，以及附着其上的珊瑚/海绵。
+//
+// 岩台是横向的岩体，视觉上用一条路径画（顶部带起伏），碰撞用一排圆。
+// 礁石/裂缝/沉船由"一串圆"组成，直接把这些圆画进同一条 path、一次 fill，
 // 就得到天然融合的轮廓（同向圆弧按非零环绕规则取并集）。
 
-import { TAU, clamp, hsl, lerp } from '../core/math.js';
+import { TAU, clamp, hsl, hash } from '../core/math.js';
 import { ctx } from '../core/viewport.js';
 import { world, depthM } from '../world/world.js';
 
-/** 把一圈圆合成一条 path。 */
-function blobPath(parts, shrink, ox, oy, cx, cy, grow = 0) {
-  for (const c of parts) {
-    let { x, y, r } = c;
-    if (shrink !== 1) {
-      x = cx + (x - cx) * shrink;
-      y = cy + (y - cy) * shrink;
-      r = r * shrink;
-    }
-    r += grow;
-    ctx.moveTo(x + r + ox, y + oy);
-    ctx.arc(x + ox, y + oy, r, 0, TAU);
-  }
+/** 岩台顶面高度：带轻微起伏，避免一条死板的直线。 */
+function topY(o, x) {
+  return o.y - o.cr
+    + Math.sin(x * 0.011 + o.seed) * 4.5
+    + Math.sin(x * 0.043 + o.seed * 2.3) * 2.5
+    + (hash(x * 0.07 + o.seed) - 0.5) * 6;
 }
 
-/** 实心块：先铺一圈暗边，再填主体，最后压一块整体高光。
- *  注意不要 stroke —— 并集路径里每个圆都会留下内部弧线。 */
-function solidBlob(o, hue, sat, lit, highlight) {
-  ctx.beginPath();
-  blobPath(o.parts, 1, 0, 0, o.x, o.y, 3);
-  ctx.fillStyle = hsl(hue, sat * 0.8, lit * 0.62, 0.95);
-  ctx.fill();
-
-  ctx.beginPath();
-  blobPath(o.parts, 1, 0, 0, o.x, o.y);
-  ctx.fillStyle = hsl(hue, sat, lit, 0.98);
-  ctx.fill();
-
-  if (highlight) {
-    // 内圈提亮：收缩后的并集仍是光滑轮廓，不会暴露拼接的圆
-    ctx.beginPath();
-    blobPath(o.parts, 0.68, -o.r * 0.03, -o.r * 0.08, o.x, o.y);
-    ctx.fillStyle = hsl(hue, sat * 0.9, lit + 9, 0.42);
-    ctx.fill();
-  }
+/** 岩台底面高度。 */
+function botY(o, x) {
+  return o.y + o.cr * (0.86 + 0.12 * Math.sin(x * 0.017 + o.seed * 1.7))
+    + Math.sin(x * 0.031 + o.seed * 0.7) * 6;
 }
 
 function drawCoral(o) {
@@ -54,7 +33,6 @@ function drawCoral(o) {
     ctx.rotate(sway * 0.12);
 
     if (c.kind === 'fan') {
-      // 扇形珊瑚：一个半圆 + 几道放射裂隙
       ctx.beginPath();
       ctx.moveTo(0, 0);
       ctx.quadraticCurveTo(-c.size * 0.9, -c.size * 0.7, -c.size * 0.35, -c.size * 1.15);
@@ -67,7 +45,6 @@ function drawCoral(o) {
       ctx.lineWidth = Math.max(0.8, c.size * 0.05);
       ctx.stroke();
     } else {
-      // 管状海绵：三根高低不同的管子
       ctx.beginPath();
       for (let i = 0; i < 3; i++) {
         const ox = (i - 1) * c.size * 0.42;
@@ -94,24 +71,110 @@ function drawCoral(o) {
   }
 }
 
-function drawRock(o) {
-  solidBlob(o, o.hue, 26, o.lit, true);
+function drawShelf(o) {
+  const step = 36;
+  const yt = x => topY(o, x);
+  const yb = x => botY(o, x);
+
+  for (const [a, b] of o.solids) {
+    // 岩体：竖向渐变，顶亮底暗
+    const grad = ctx.createLinearGradient(0, o.y - o.cr, 0, o.y + o.cr);
+    grad.addColorStop(0, hsl(o.hue, 28, o.lit + 7));
+    grad.addColorStop(0.45, hsl(o.hue, 26, o.lit));
+    grad.addColorStop(1, hsl(o.hue, 22, Math.max(4, o.lit - 7)));
+
+    ctx.beginPath();
+    ctx.moveTo(a, yt(a));
+    for (let x = a + step; x < b; x += step) ctx.lineTo(x, yt(x));
+    ctx.lineTo(b, yt(b));
+    // 右端鼓成圆弧，不是直切
+    ctx.quadraticCurveTo(b + o.cr * 0.85, o.y, b, yb(b));
+    for (let x = b - step; x > a; x -= step) ctx.lineTo(x, yb(x));
+    ctx.lineTo(a, yb(a));
+    // 左端同理
+    ctx.quadraticCurveTo(a - o.cr * 0.85, o.y, a, yt(a));
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // 顶面受光带
+    ctx.beginPath();
+    ctx.moveTo(a, yt(a));
+    for (let x = a + step; x < b; x += step) ctx.lineTo(x, yt(x));
+    ctx.lineTo(b, yt(b));
+    ctx.lineTo(b, yt(b) + 10);
+    for (let x = b - step; x > a; x -= step) ctx.lineTo(x, yt(x) + 10);
+    ctx.lineTo(a, yt(a) + 10);
+    ctx.closePath();
+    ctx.fillStyle = hsl(o.hue, 34, o.lit + 16, 0.5);
+    ctx.fill();
+
+    // 嵌在顶面的碎石，打断那条直线
+    const bumpCount = Math.max(2, Math.floor((b - a) / 130));
+    for (let i = 0; i < bumpCount; i++) {
+      const rx = a + ((i + 0.5) / bumpCount) * (b - a) + (hash(o.seed + i * 3.7) - 0.5) * 40;
+      const rr = 7 + hash(o.seed + i * 5.1) * 13;
+      ctx.beginPath();
+      ctx.ellipse(rx, yt(rx) + rr * 0.35, rr * 1.35, rr * 0.75, 0, 0, TAU);
+      ctx.fillStyle = hsl(o.hue, 26, o.lit + 4, 0.85);
+      ctx.fill();
+    }
+
+    // 层理：多几条、带起伏
+    for (let k = 1; k <= 4; k++) {
+      const baseY = o.y - o.cr * 0.28 + (o.cr * 0.42) * k;
+      ctx.beginPath();
+      ctx.moveTo(a, baseY);
+      for (let x = a + step * 2; x < b; x += step * 2) {
+        ctx.lineTo(x, baseY + Math.sin(x * 0.02 + o.seed + k * 1.7) * (2 + k));
+      }
+      ctx.strokeStyle = hsl(o.hue, 24, Math.max(4, o.lit - 8), 0.34 + k * 0.05);
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    }
+  }
+
   drawCoral(o);
 }
 
-function drawCave(o) {
+/** 并集圆填充：先一圈暗边，再主体，再内圈提亮。不要 stroke（会露出内部弧线）。 */
+function solidBlob(o, hue, sat, lit, highlight) {
+  const g = 3;
+  ctx.beginPath();
+  for (const c of o.parts) {
+    ctx.moveTo(c.x + c.r + g, c.y);
+    ctx.arc(c.x, c.y, c.r + g, 0, TAU);
+  }
+  ctx.fillStyle = hsl(hue, sat * 0.8, lit * 0.62, 0.95);
+  ctx.fill();
+
+  ctx.beginPath();
+  for (const c of o.parts) {
+    ctx.moveTo(c.x + c.r, c.y);
+    ctx.arc(c.x, c.y, c.r, 0, TAU);
+  }
+  ctx.fillStyle = hsl(hue, sat, lit, 0.98);
+  ctx.fill();
+
+  if (highlight) {
+    // 不用同心缩小（那会看起来像个球），而是在顶面抹一道偏上的窄高光
+    ctx.beginPath();
+    ctx.ellipse(o.x, o.y - o.r * 0.42, o.r * 0.72, o.r * 0.24, 0, 0, TAU);
+    ctx.fillStyle = hsl(hue, sat * 0.9, lit + 10, 0.28);
+    ctx.fill();
+  }
+}
+
+function drawCrevice(o) {
   solidBlob(o, o.hue, 28, o.lit, true);
 
-  // 两块巨石之间的暗缝：高度贴合巨石，上下收窄，避免变成一根黑柱子
-  const halfH = o.outerR * 0.52;
-
-  // 一层更宽的柔和暗影，让缝隙和石体有过渡
+  // 两块石头之间的暗缝
+  const halfH = o.r * 0.62;
   ctx.beginPath();
   ctx.ellipse(o.x, o.y, o.gap * 0.82, halfH * 1.05, 0, 0, TAU);
   ctx.fillStyle = 'rgba(3,14,20,.4)';
   ctx.fill();
 
-  // 缝隙本体
   ctx.beginPath();
   ctx.moveTo(o.x, o.y - halfH);
   ctx.quadraticCurveTo(o.x - o.gap * 0.54, o.y - halfH * 0.15, o.x - o.gap * 0.34, o.y + halfH);
@@ -130,7 +193,6 @@ function drawWreck(o) {
   ctx.translate(o.x, o.y);
   ctx.rotate(tilt);
 
-  // 船体：一段弧形外壳
   ctx.beginPath();
   ctx.moveTo(-len * 0.5, -hullR * 0.2);
   ctx.quadraticCurveTo(-len * 0.28, hullR * 1.15, 0, hullR * 1.25);
@@ -141,7 +203,6 @@ function drawWreck(o) {
   ctx.fillStyle = hsl(o.hue, 22, o.lit, 0.96);
   ctx.fill();
 
-  // 肋骨
   ctx.beginPath();
   for (let i = 0; i < 5; i++) {
     const x = -len * 0.36 + i * (len * 0.18);
@@ -152,7 +213,6 @@ function drawWreck(o) {
   ctx.lineWidth = Math.max(1.5, hullR * 0.13);
   ctx.stroke();
 
-  // 断掉的桅杆
   ctx.beginPath();
   ctx.moveTo(-len * 0.02, -hullR * 0.4);
   ctx.lineTo(len * 0.06, -hullR * 2.1);
@@ -166,15 +226,18 @@ function drawWreck(o) {
 }
 
 export function drawTerrain() {
-  // 深处的岩石整体更暗，靠生物光才看得见轮廓
   const deep = clamp((depthM() - 60) / 220, 0, 1);
   ctx.save();
-  if (deep > 0.01) ctx.globalAlpha = 1 - deep * 0.12;
+  if (deep > 0.01) ctx.globalAlpha = 1 - deep * 0.1;
 
+  // 先画岩台（在下面），再画石头/沉船（在上面）
   for (const o of world.terrain) {
-    if (o.kind === 'rock') drawRock(o);
-    else if (o.kind === 'cave') drawCave(o);
-    else drawWreck(o);
+    if (o.kind === 'shelf') drawShelf(o);
+  }
+  for (const o of world.terrain) {
+    if (o.kind === 'boulder') { solidBlob(o, o.hue, 26, o.lit, true); drawCoral(o); }
+    else if (o.kind === 'crevice') drawCrevice(o);
+    else if (o.kind === 'wreck') drawWreck(o);
   }
 
   ctx.restore();

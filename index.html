@@ -716,39 +716,23 @@
   }
 
   // src/world/terrain.js
-  var ROCK_MAX = 4;
-  var CAVE_MAX = 2;
-  var WRECK_MAX = 1;
-  function rockTarget() {
-    return clamp(Math.round(viewArea() / 26e4), 2, ROCK_MAX);
-  }
-  function caveTarget() {
-    return clamp(Math.round(viewArea() / 9e5), 0, CAVE_MAX);
-  }
-  function wreckTarget() {
-    if (depthM() < 70) return 0;
-    return Math.random() < 0.35 ? WRECK_MAX : 0;
-  }
-  function offscreenFar(x, y, mul = 2.2) {
-    return Math.abs(x - world.cam.x) > viewHW() * mul || Math.abs(y - world.cam.y) > viewHH() * mul;
-  }
-  function pickSpot(minGap) {
-    const hw = viewHW(), hh = viewHH();
-    for (let attempt = 0; attempt < 12; attempt++) {
-      const x = world.cam.x + rand(-hw * 1.25, hw * 1.25);
-      const y = clamp(world.cam.y + rand(-hh * 1.15, hh * 1.15), 200, 3e4);
-      const dp = Math.hypot(x - world.player.x, y - world.player.y);
-      if (dp < Math.max(minGap, world.player.r * 8)) continue;
-      let clash = false;
-      for (const o of world.terrain) {
-        if (Math.hypot(x - o.x, y - o.y) < (o.r + minGap) * 0.72) {
-          clash = true;
-          break;
-        }
+  var SHELF_BASE = 330;
+  var SHELF_STEP = 780;
+  var SHELF_SPAN = 5200;
+  var SHELF_THICK = 128;
+  var CREVICE_GAP = 76;
+  var shelfCache = /* @__PURE__ */ new Map();
+  function mergeIntervals(list) {
+    const out = [];
+    for (const [a, b] of list) {
+      if (b - a < 8) continue;
+      if (out.length && a <= out[out.length - 1][1] + 4) {
+        out[out.length - 1][1] = Math.max(out[out.length - 1][1], b);
+      } else {
+        out.push([a, b]);
       }
-      if (!clash) return { x, y };
     }
-    return null;
+    return out;
   }
   function finalize(o) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -764,111 +748,176 @@
     o.maxY = maxY;
     return o;
   }
-  function makeRock(init) {
-    const spot = init ? { x: world.cam.x + rand(-viewHW(), viewHW()), y: clamp(world.cam.y + rand(-viewHH(), viewHH()), 220, 3e4) } : pickSpot(200);
-    if (!spot) return null;
-    const r = rand(52, 118);
-    const parts = [{ x: spot.x, y: spot.y + r * 0.18, r: r * 0.78 }];
-    const lumps = 2 + (Math.random() * 3 | 0);
-    for (let i = 0; i < lumps; i++) {
-      const a = rand(TAU);
-      const d = rand(0, r * 0.55);
-      parts.push({
-        x: spot.x + Math.cos(a) * d,
-        y: spot.y + Math.sin(a) * d * 0.6 + r * 0.1,
-        r: rand(r * 0.42, r * 0.72)
+  function coralAt(seed, spread, baseY) {
+    const n = 2 + Math.floor(hash(seed + 3) * 3);
+    const list = [];
+    for (let i = 0; i < n; i++) {
+      list.push({
+        ox: (hash(seed + 10 + i) - 0.5) * spread,
+        oy: baseY + (hash(seed + 20 + i) - 0.5) * 14,
+        size: 9 + hash(seed + 30 + i) * 13,
+        hue: (hash(seed + 40 + i) * 80 + 285) % 360,
+        kind: hash(seed + 50 + i) < 0.5 ? "fan" : "tube",
+        ph: hash(seed + 60 + i) * TAU
       });
     }
-    return finalize({
-      kind: "rock",
-      x: spot.x,
-      y: spot.y,
-      r,
-      parts,
-      seed: rand(100),
-      hue: rand(196, 212),
-      lit: rand(17, 25),
-      // 石头上附着的珊瑚/海绵
-      coral: Array.from({ length: 2 + (Math.random() * 3 | 0) }, () => ({
-        ox: rand(-r * 0.62, r * 0.62),
-        oy: rand(-r * 0.72, -r * 0.15),
-        size: rand(9, 22),
-        hue: rand(300, 372) % 360,
-        kind: Math.random() < 0.5 ? "fan" : "tube",
-        ph: rand(TAU)
-      }))
-    });
+    return list;
   }
-  function makeCave(init) {
-    const spot = init ? { x: world.cam.x + rand(-viewHW() * 0.75, viewHW() * 0.75), y: clamp(world.cam.y + rand(-viewHH() * 0.65, viewHH() * 0.65), 260, 3e4) } : pickSpot(320);
-    if (!spot) return null;
-    const gap = 76;
-    const cr = rand(52, 68);
-    const parts = [];
-    for (const side of [-1, 1]) {
-      const innerX = spot.x + side * (gap / 2 + cr);
-      parts.push({ x: innerX, y: spot.y, r: cr });
-      parts.push({ x: innerX + side * cr * 0.62, y: spot.y - cr * 0.52, r: cr * 0.78 });
-      parts.push({ x: innerX + side * cr * 0.55, y: spot.y + cr * 0.6, r: cr * 0.7 });
+  function shelfAt(n) {
+    if (shelfCache.has(n)) return shelfCache.get(n);
+    const s = n * 7.13 + 2.71;
+    const y = SHELF_BASE + n * SHELF_STEP + (hash(s) - 0.5) * 150;
+    if (hash(s + 0.5) < 0.17) {
+      shelfCache.set(n, null);
+      return null;
     }
-    return finalize({
-      kind: "cave",
-      x: spot.x,
-      y: spot.y,
-      r: cr * 2.1,
-      parts,
-      gap,
-      outerR: cr * 2,
-      seed: rand(100),
-      hue: rand(200, 214),
-      lit: rand(15, 21),
-      coral: Array.from({ length: 3 + (Math.random() * 3 | 0) }, () => ({
-        ox: rand(-cr * 1.9, cr * 1.9),
-        oy: rand(-cr * 1.1, -cr * 0.25),
-        size: rand(10, 22),
-        hue: rand(300, 372) % 360,
-        kind: Math.random() < 0.5 ? "fan" : "tube",
-        ph: rand(TAU)
-      }))
-    });
-  }
-  function makeWreck(init) {
-    const spot = init ? { x: world.cam.x + rand(-viewHW() * 0.7, viewHW() * 0.7), y: clamp(world.cam.y + rand(-viewHH() * 0.5, viewHH() * 0.5), 300, 3e4) } : pickSpot(380);
-    if (!spot) return null;
-    const len = rand(190, 290);
-    const hullR = len * 0.16;
-    const tilt = rand(-0.5, 0.5);
-    const parts = [];
-    const segs = 4;
-    for (let i = 0; i < segs; i++) {
-      const t = (i / (segs - 1) - 0.5) * len * 0.78;
-      parts.push({
-        x: spot.x + Math.cos(tilt) * t,
-        y: spot.y + Math.sin(tilt) * t,
-        r: hullR * (1 - Math.abs(i / (segs - 1) - 0.5) * 0.5)
+    const thick = SHELF_THICK * (0.75 + hash(s + 1) * 0.55);
+    const cr = thick * 0.5;
+    const gapCount = 2 + Math.floor(hash(s + 2) * 3);
+    const gaps = [];
+    const slotWidth = SHELF_SPAN * 0.88 / gapCount;
+    for (let k = 0; k < gapCount; k++) {
+      const slot = (k + 0.5) / gapCount - 0.5;
+      const jitter = (hash(s + 10 + k) - 0.5) * slotWidth * 0.45;
+      gaps.push({
+        x: slot * SHELF_SPAN * 0.88 + jitter,
+        w: 205 + hash(s + 20 + k) * 105
       });
     }
-    return finalize({
-      kind: "wreck",
-      x: spot.x,
-      y: spot.y,
-      r: len * 0.5,
+    gaps.sort((a, b) => a.x - b.x);
+    const solids = [];
+    let cursor = -SHELF_SPAN / 2;
+    for (const g of gaps) {
+      const left = g.x - g.w / 2;
+      if (left > cursor) solids.push([cursor, left]);
+      cursor = Math.max(cursor, g.x + g.w / 2);
+    }
+    if (cursor < SHELF_SPAN / 2) solids.push([cursor, SHELF_SPAN / 2]);
+    const merged = mergeIntervals(solids);
+    const parts = [];
+    for (const [a, b] of merged) {
+      const span = b - a;
+      const count = Math.max(1, Math.ceil(span / (cr * 1.4)));
+      for (let i = 0; i <= count; i++) {
+        parts.push({ x: a + span * i / count, y, r: cr });
+      }
+    }
+    const shelf = finalize({
+      kind: "shelf",
+      n,
+      y,
+      thick,
+      cr,
+      x0: -SHELF_SPAN / 2,
+      x1: SHELF_SPAN / 2,
+      solids: merged,
+      gaps,
       parts,
-      len,
-      tilt,
-      hullR,
-      seed: rand(100),
-      hue: rand(30, 44),
-      lit: rand(15, 21),
-      coral: Array.from({ length: 4 + (Math.random() * 4 | 0) }, () => ({
-        ox: rand(-len * 0.4, len * 0.4),
-        oy: rand(-hullR * 0.9, hullR * 0.2),
-        size: rand(8, 18),
-        hue: rand(300, 372) % 360,
-        kind: Math.random() < 0.5 ? "fan" : "tube",
-        ph: rand(TAU)
-      }))
+      seed: s,
+      hue: 202 + hash(s + 4) * 10,
+      lit: 16 + hash(s + 5) * 7,
+      coral: []
     });
+    shelf.x = 0;
+    shelf.y = y;
+    for (const [a, b] of merged) {
+      if (b - a < 160) continue;
+      const spread = Math.min(b - a - 60, 900);
+      shelf.coral.push(...coralAt(s + a * 0.01, spread, -cr + 4).map((c) => ({ ...c, ox: clamp(c.ox, -spread / 2, spread / 2) + (a + b) / 2 })));
+    }
+    const boulders = [];
+    for (const [a, b] of merged) {
+      const width = b - a;
+      if (width < 220) continue;
+      const count = 1 + Math.floor(hash(s + a * 0.013) * 2);
+      for (let i = 0; i < count; i++) {
+        const bs = s + a * 0.017 + i * 9.1;
+        const r = 46 + hash(bs) * 58;
+        const cx = lerp(a + r * 1.1, b - r * 1.1, hash(bs + 1));
+        if (b - a < r * 2.6) continue;
+        const by = y - cr - r * 0.32;
+        const bparts = [{ x: cx, y: by, r: r * 0.92 }];
+        const lump = 2 + Math.floor(hash(bs + 2) * 3);
+        for (let k = 0; k < lump; k++) {
+          const ang = hash(bs + 3 + k) * TAU;
+          const d = hash(bs + 8 + k) * r * 0.5;
+          bparts.push({
+            x: cx + Math.cos(ang) * d,
+            y: by + Math.sin(ang) * d * 0.6 - r * 0.15,
+            r: r * (0.4 + hash(bs + 14 + k) * 0.3)
+          });
+        }
+        boulders.push(finalize({
+          kind: "boulder",
+          x: cx,
+          y: by,
+          r,
+          parts: bparts,
+          seed: bs,
+          hue: 200 + hash(bs + 4) * 12,
+          lit: 17 + hash(bs + 5) * 8,
+          coral: coralAt(bs + 40, r * 1.2, -r * 0.55)
+        }));
+      }
+    }
+    const creviceSeeds = merged.filter(([a, b]) => b - a > 420);
+    if (creviceSeeds.length && hash(s + 6) < 0.55) {
+      const [a, b] = creviceSeeds[Math.floor(hash(s + 7) * creviceSeeds.length)];
+      const cxc = lerp(a + 260, b - 260, hash(s + 8));
+      const cr2 = 54;
+      const cparts = [];
+      for (const side of [-1, 1]) {
+        const innerX = cxc + side * (CREVICE_GAP / 2 + cr2);
+        cparts.push({ x: innerX, y: y - cr2 * 0.9, r: cr2 });
+        cparts.push({ x: innerX + side * cr2 * 0.62, y: y - cr2 * 1.5, r: cr2 * 0.78 });
+        cparts.push({ x: innerX + side * cr2 * 0.5, y: y - cr2 * 0.25, r: cr2 * 0.72 });
+      }
+      boulders.push(finalize({
+        kind: "crevice",
+        x: cxc,
+        y: y - cr2 * 0.9,
+        r: cr2 * 1.9,
+        parts: cparts,
+        gap: CREVICE_GAP,
+        seed: s + 9,
+        hue: 201 + hash(s + 11) * 10,
+        lit: 15 + hash(s + 12) * 6,
+        coral: coralAt(s + 60, cr2 * 3.4, -cr2 * 1.5)
+      }));
+    }
+    let wreck = null;
+    if (y > 1500 && hash(s + 13) < 0.3 && merged.length) {
+      const [a, b] = merged[0];
+      const len = 210 + hash(s + 14) * 90;
+      if (b - a > len * 1.3) {
+        const wx = (a + b) / 2;
+        const tilt = (hash(s + 15) - 0.5) * 0.5;
+        const hullR = len * 0.15;
+        const wy = y - cr - hullR * 0.5;
+        const wparts = [];
+        for (let i = 0; i < 4; i++) {
+          const tt = (i / 3 - 0.5) * len * 0.75;
+          wparts.push({ x: wx + Math.cos(tilt) * tt, y: wy + Math.sin(tilt) * tt, r: hullR * 0.95 });
+        }
+        wreck = finalize({
+          kind: "wreck",
+          x: wx,
+          y: wy,
+          r: len * 0.5,
+          parts: wparts,
+          len,
+          tilt,
+          hullR,
+          seed: s + 16,
+          hue: 34 + hash(s + 17) * 10,
+          lit: 16 + hash(s + 18) * 6,
+          coral: coralAt(s + 70, len * 0.7, -hullR * 0.4)
+        });
+      }
+    }
+    const result = { shelf, boulders, wreck };
+    shelfCache.set(n, result);
+    return result;
   }
   var OUT = { x: 0, y: 0 };
   function collideTerrain(px, py, pr) {
@@ -892,7 +941,7 @@
             continue;
           }
           const d = Math.sqrt(d2);
-          const push = (rr - d) / d;
+          const push = (rr - d + 0.02) / d;
           OUT.x += dx * push;
           OUT.y += dy * push;
           moved = true;
@@ -921,57 +970,51 @@
     }
     return true;
   }
+  var loaded = /* @__PURE__ */ new Set();
   function updateTerrain() {
-    const { terrain } = world;
-    for (let i = terrain.length - 1; i >= 0; i--) {
-      if (offscreenFar(terrain[i].x, terrain[i].y)) terrain.splice(i, 1);
+    const { cam, terrain } = world;
+    const top = cam.y - viewHH() * 1.5;
+    const bottom = cam.y + viewHH() * 1.7;
+    const first = Math.floor((top - SHELF_BASE) / SHELF_STEP) - 1;
+    const last = Math.ceil((bottom - SHELF_BASE) / SHELF_STEP) + 1;
+    const want = /* @__PURE__ */ new Set();
+    for (let n = first; n <= last; n++) want.add(n);
+    for (const o of terrain) {
+      if (o.shelfIndex !== void 0 && !want.has(o.shelfIndex)) {
+        terrain.splice(terrain.indexOf(o), 1);
+      }
     }
-    const rocks = terrain.filter((o) => o.kind === "rock").length;
-    const caves = terrain.filter((o) => o.kind === "cave").length;
-    const wrecks = terrain.filter((o) => o.kind === "wreck").length;
-    if (rocks < rockTarget()) {
-      const o = clampBelowSurface(makeRock(terrain.length === 0));
-      if (o) terrain.push(o);
+    for (const n of want) {
+      if (loaded.has(n)) continue;
+      loaded.add(n);
+      const data = shelfAt(n);
+      if (!data) continue;
+      data.shelf.shelfIndex = n;
+      terrain.push(data.shelf);
+      for (const b of data.boulders) {
+        b.shelfIndex = n;
+        terrain.push(b);
+      }
+      if (data.wreck) {
+        data.wreck.shelfIndex = n;
+        terrain.push(data.wreck);
+      }
     }
-    if (caves < caveTarget()) {
-      const o = clampBelowSurface(makeCave(false));
-      if (o) terrain.push(o);
+    for (const n of [...loaded]) {
+      if (!want.has(n)) loaded.delete(n);
     }
-    if (wrecks < wreckTarget()) {
-      const o = clampBelowSurface(makeWreck(false));
-      if (o) terrain.push(o);
-    }
-  }
-  var SURFACE_MARGIN = 185;
-  function clampBelowSurface(o) {
-    if (!o) return o;
-    const shift = SURFACE_MARGIN - o.minY;
-    if (shift > 0) {
-      o.y += shift;
-      for (const c of o.parts) c.y += shift;
-      o.minY += shift;
-      o.maxY += shift;
-    }
-    return o;
   }
   function resetTerrain() {
     world.terrain.length = 0;
-    const clear = (o) => o && Math.hypot(o.x - world.player.x, o.y - world.player.y) > world.player.r * 9;
-    for (let i = 0; i < rockTarget(); i++) {
-      const o = clampBelowSurface(makeRock(true));
-      if (clear(o)) world.terrain.push(o);
-    }
-    for (let i = 0; i < caveTarget(); i++) {
-      const o = clampBelowSurface(makeCave(true));
-      if (clear(o)) world.terrain.push(o);
-    }
+    loaded.clear();
+    updateTerrain();
   }
 
   // src/world/benthos.js
   var CRAB_MAX = 4;
   var TURTLE_MAX = 2;
   function crabTarget() {
-    const rocks = world.terrain.filter((o) => o.kind === "rock").length;
+    const rocks = world.terrain.filter((o) => o.kind === "boulder").length;
     return clamp(Math.round(Math.min(rocks, viewArea() / 4e5)), 0, CRAB_MAX);
   }
   function turtleTarget() {
@@ -2061,9 +2104,9 @@
       }
       ctx.lineTo(W + 90, H + 100);
       ctx.closePath();
-      ctx.fillStyle = hsl(p.a[0] + 6, p.a[1] * 0.62, Math.max(3, p.a[2] * L.li), 0.97);
+      ctx.fillStyle = hsl(p.a[0] + 6, p.a[1] * 0.55, Math.max(3, p.a[2] * L.li * 0.72), 0.9);
       ctx.fill();
-      ctx.strokeStyle = hsl(p.a[0] + 12, Math.min(60, p.a[1] * 0.5), Math.min(74, p.a[2] * 1.25), 0.14);
+      ctx.strokeStyle = hsl(p.a[0] + 12, Math.min(60, p.a[1] * 0.5), Math.min(74, p.a[2] * 1.25), 0.09);
       ctx.lineWidth = 1.4;
       ctx.stroke();
     }
@@ -2122,7 +2165,7 @@
         const sway = Math.sin(time * 0.62 + seed) * (10 + h * 0.055);
         const lean = Math.sin(seed * 2.3) * w * 0.9;
         const topX = x + sway + lean;
-        const topY = baseY - h;
+        const topY2 = baseY - h;
         const wv = w * 0.16;
         ctx.moveTo(x - w * 0.5, baseY + 10);
         ctx.bezierCurveTo(
@@ -2139,7 +2182,7 @@
           topX - w * 0.16,
           baseY - h * 0.88,
           topX,
-          topY
+          topY2
         );
         ctx.bezierCurveTo(
           topX + w * 0.16,
@@ -2272,34 +2315,11 @@
   }
 
   // src/render/terrain.js
-  function blobPath(parts, shrink, ox, oy, cx, cy, grow2 = 0) {
-    for (const c of parts) {
-      let { x, y, r } = c;
-      if (shrink !== 1) {
-        x = cx + (x - cx) * shrink;
-        y = cy + (y - cy) * shrink;
-        r = r * shrink;
-      }
-      r += grow2;
-      ctx.moveTo(x + r + ox, y + oy);
-      ctx.arc(x + ox, y + oy, r, 0, TAU);
-    }
+  function topY(o, x) {
+    return o.y - o.cr + Math.sin(x * 0.011 + o.seed) * 4.5 + Math.sin(x * 0.043 + o.seed * 2.3) * 2.5 + (hash(x * 0.07 + o.seed) - 0.5) * 6;
   }
-  function solidBlob(o, hue, sat, lit, highlight) {
-    ctx.beginPath();
-    blobPath(o.parts, 1, 0, 0, o.x, o.y, 3);
-    ctx.fillStyle = hsl(hue, sat * 0.8, lit * 0.62, 0.95);
-    ctx.fill();
-    ctx.beginPath();
-    blobPath(o.parts, 1, 0, 0, o.x, o.y);
-    ctx.fillStyle = hsl(hue, sat, lit, 0.98);
-    ctx.fill();
-    if (highlight) {
-      ctx.beginPath();
-      blobPath(o.parts, 0.68, -o.r * 0.03, -o.r * 0.08, o.x, o.y);
-      ctx.fillStyle = hsl(hue, sat * 0.9, lit + 9, 0.42);
-      ctx.fill();
-    }
+  function botY(o, x) {
+    return o.y + o.cr * (0.86 + 0.12 * Math.sin(x * 0.017 + o.seed * 1.7)) + Math.sin(x * 0.031 + o.seed * 0.7) * 6;
   }
   function drawCoral(o) {
     const t = world.time;
@@ -2348,13 +2368,85 @@
       ctx.restore();
     }
   }
-  function drawRock(o) {
-    solidBlob(o, o.hue, 26, o.lit, true);
+  function drawShelf(o) {
+    const step = 36;
+    const yt = (x) => topY(o, x);
+    const yb = (x) => botY(o, x);
+    for (const [a, b] of o.solids) {
+      const grad = ctx.createLinearGradient(0, o.y - o.cr, 0, o.y + o.cr);
+      grad.addColorStop(0, hsl(o.hue, 28, o.lit + 7));
+      grad.addColorStop(0.45, hsl(o.hue, 26, o.lit));
+      grad.addColorStop(1, hsl(o.hue, 22, Math.max(4, o.lit - 7)));
+      ctx.beginPath();
+      ctx.moveTo(a, yt(a));
+      for (let x = a + step; x < b; x += step) ctx.lineTo(x, yt(x));
+      ctx.lineTo(b, yt(b));
+      ctx.quadraticCurveTo(b + o.cr * 0.85, o.y, b, yb(b));
+      for (let x = b - step; x > a; x -= step) ctx.lineTo(x, yb(x));
+      ctx.lineTo(a, yb(a));
+      ctx.quadraticCurveTo(a - o.cr * 0.85, o.y, a, yt(a));
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(a, yt(a));
+      for (let x = a + step; x < b; x += step) ctx.lineTo(x, yt(x));
+      ctx.lineTo(b, yt(b));
+      ctx.lineTo(b, yt(b) + 10);
+      for (let x = b - step; x > a; x -= step) ctx.lineTo(x, yt(x) + 10);
+      ctx.lineTo(a, yt(a) + 10);
+      ctx.closePath();
+      ctx.fillStyle = hsl(o.hue, 34, o.lit + 16, 0.5);
+      ctx.fill();
+      const bumpCount = Math.max(2, Math.floor((b - a) / 130));
+      for (let i = 0; i < bumpCount; i++) {
+        const rx = a + (i + 0.5) / bumpCount * (b - a) + (hash(o.seed + i * 3.7) - 0.5) * 40;
+        const rr = 7 + hash(o.seed + i * 5.1) * 13;
+        ctx.beginPath();
+        ctx.ellipse(rx, yt(rx) + rr * 0.35, rr * 1.35, rr * 0.75, 0, 0, TAU);
+        ctx.fillStyle = hsl(o.hue, 26, o.lit + 4, 0.85);
+        ctx.fill();
+      }
+      for (let k = 1; k <= 4; k++) {
+        const baseY = o.y - o.cr * 0.28 + o.cr * 0.42 * k;
+        ctx.beginPath();
+        ctx.moveTo(a, baseY);
+        for (let x = a + step * 2; x < b; x += step * 2) {
+          ctx.lineTo(x, baseY + Math.sin(x * 0.02 + o.seed + k * 1.7) * (2 + k));
+        }
+        ctx.strokeStyle = hsl(o.hue, 24, Math.max(4, o.lit - 8), 0.34 + k * 0.05);
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+      }
+    }
     drawCoral(o);
   }
-  function drawCave(o) {
+  function solidBlob(o, hue, sat, lit, highlight) {
+    const g = 3;
+    ctx.beginPath();
+    for (const c of o.parts) {
+      ctx.moveTo(c.x + c.r + g, c.y);
+      ctx.arc(c.x, c.y, c.r + g, 0, TAU);
+    }
+    ctx.fillStyle = hsl(hue, sat * 0.8, lit * 0.62, 0.95);
+    ctx.fill();
+    ctx.beginPath();
+    for (const c of o.parts) {
+      ctx.moveTo(c.x + c.r, c.y);
+      ctx.arc(c.x, c.y, c.r, 0, TAU);
+    }
+    ctx.fillStyle = hsl(hue, sat, lit, 0.98);
+    ctx.fill();
+    if (highlight) {
+      ctx.beginPath();
+      ctx.ellipse(o.x, o.y - o.r * 0.42, o.r * 0.72, o.r * 0.24, 0, 0, TAU);
+      ctx.fillStyle = hsl(hue, sat * 0.9, lit + 10, 0.28);
+      ctx.fill();
+    }
+  }
+  function drawCrevice(o) {
     solidBlob(o, o.hue, 28, o.lit, true);
-    const halfH = o.outerR * 0.52;
+    const halfH = o.r * 0.62;
     ctx.beginPath();
     ctx.ellipse(o.x, o.y, o.gap * 0.82, halfH * 1.05, 0, 0, TAU);
     ctx.fillStyle = "rgba(3,14,20,.4)";
@@ -2404,11 +2496,16 @@
   function drawTerrain() {
     const deep = clamp((depthM() - 60) / 220, 0, 1);
     ctx.save();
-    if (deep > 0.01) ctx.globalAlpha = 1 - deep * 0.12;
+    if (deep > 0.01) ctx.globalAlpha = 1 - deep * 0.1;
     for (const o of world.terrain) {
-      if (o.kind === "rock") drawRock(o);
-      else if (o.kind === "cave") drawCave(o);
-      else drawWreck(o);
+      if (o.kind === "shelf") drawShelf(o);
+    }
+    for (const o of world.terrain) {
+      if (o.kind === "boulder") {
+        solidBlob(o, o.hue, 26, o.lit, true);
+        drawCoral(o);
+      } else if (o.kind === "crevice") drawCrevice(o);
+      else if (o.kind === "wreck") drawWreck(o);
     }
     ctx.restore();
   }
