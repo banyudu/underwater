@@ -3,6 +3,49 @@
 import { TAU, clamp, hsl } from '../core/math.js';
 import { ctx } from '../core/viewport.js';
 import { PLAYER_SPEC } from '../config/species.js';
+
+// 渐变在单位空间里定义，绘制时被 CTM 变换到每条鱼身上，所以可以按颜色桶复用。
+// 这样"用渐变换掉硬色带"不会带来每帧新建渐变的开销。
+const gradCache = new Map();
+function cached(key, make) {
+  let g = gradCache.get(key);
+  if (!g) { g = make(); gradCache.set(key, g); }
+  return g;
+}
+
+/** 身体：背深腹浅，画出体积。 */
+function bodyFill(tag, hue, sat, lit) {
+  const ck = `b|${tag}|${Math.round(hue / 4)}|${Math.round(lit / 3)}`;
+  return cached(ck, () => {
+    const g = ctx.createLinearGradient(0, -0.56, 0, 0.56);
+    g.addColorStop(0, hsl(hue, sat * 0.9, lit * 0.7));
+    g.addColorStop(0.46, hsl(hue, sat, lit));
+    g.addColorStop(1, hsl(hue + 5, sat * 0.55, Math.min(96, lit * 1.45)));
+    return g;
+  });
+}
+
+/** 尾鳍：从身体色过渡到鳍色，看起来像连体的半透明组织。 */
+function tailFill(tag, hue, sat, lit, fin) {
+  const ck = `t|${tag}|${Math.round(hue / 4)}|${Math.round(lit / 3)}`;
+  return cached(ck, () => {
+    const g = ctx.createLinearGradient(-0.6, 0, -1.5, 0);
+    g.addColorStop(0, hsl(hue, sat * 0.8, lit * 0.95, 0.95));
+    g.addColorStop(1, hsl(fin[0], fin[1], fin[2], 0.95));
+    return g;
+  });
+}
+
+/** 背鳍：根部融进身体，尖端才显鳍色，避免"帽子"感。 */
+function dorsalFill(tag, hue, sat, lit, fin) {
+  const ck = `d|${tag}|${Math.round(hue / 4)}|${Math.round(lit / 3)}`;
+  return cached(ck, () => {
+    const g = ctx.createLinearGradient(0, -0.24, 0, -0.82);
+    g.addColorStop(0, hsl(hue, sat * 0.92, lit * 0.86, 0.96));
+    g.addColorStop(1, hsl(fin[0], fin[1], fin[2], 0.88));
+    return g;
+  });
+}
 import { world, depthM } from '../world/world.js';
 
 /** 鱼身轮廓（单位长度 2、单位高度 ~1.04）。 */
@@ -22,7 +65,6 @@ export function drawFish(f) {
   const s = f.r;
   const spec = f.spec;
   const sway = Math.sin(f.phase) * 0.16;
-  const finCol = hsl(spec.fin[0], spec.fin[1], spec.fin[2], 0.82);
   const deep = clamp((depthM() - 45) / 170, 0, 1);
 
   ctx.save();
@@ -50,18 +92,26 @@ export function drawFish(f) {
   ctx.quadraticCurveTo(-1.15, sway * 0.5, -1.42, 0.52 + sway);
   ctx.quadraticCurveTo(-1.02, 0.18 + sway * 0.4, -0.66, 0);
   ctx.closePath();
-  ctx.fillStyle = finCol;
+  ctx.fillStyle = tailFill(`s:${f.key}`, f.hue, spec.s, f.lit, spec.fin);
   ctx.fill();
 
-  // dorsal fin
+  // dorsal fin：后掠的尖鳍，前缘陡、后缘缓（原来是个圆顶包，像发髻）
   ctx.beginPath();
-  ctx.moveTo(0.16, -0.39);
-  ctx.quadraticCurveTo(-0.06, -0.8, -0.4, -0.58);
-  ctx.quadraticCurveTo(-0.52, -0.44, -0.56, -0.31);
+  ctx.moveTo(0.18, -0.3);
+  ctx.lineTo(-0.16, -0.78);                                  // 尖点（后掠）
+  ctx.quadraticCurveTo(-0.48, -0.62, -0.62, -0.28);          // 后缘凹弧回身
   ctx.closePath();
-  ctx.globalAlpha = 0.82;
+  ctx.fillStyle = dorsalFill(`s:${f.key}`, f.hue, spec.s, f.lit, spec.fin);
   ctx.fill();
-  ctx.globalAlpha = 1;
+
+  // anal fin：腹部小鳍，补上鱼体的平衡感
+  ctx.beginPath();
+  ctx.moveTo(-0.08, 0.3);
+  ctx.lineTo(-0.34, 0.6);
+  ctx.quadraticCurveTo(-0.54, 0.5, -0.58, 0.3);
+  ctx.closePath();
+  ctx.fillStyle = hsl(spec.fin[0], spec.fin[1], spec.fin[2], 0.85);
+  ctx.fill();
 
   // pectoral fin
   ctx.save();
@@ -73,30 +123,28 @@ export function drawFish(f) {
   ctx.fill();
   ctx.restore();
 
-  // body
+  // body：渐变色画体积（背深腹浅），替代原来两条硬边色带
   bodyPath(ctx);
-  ctx.fillStyle = hsl(f.hue, spec.s, f.lit);
+  ctx.fillStyle = bodyFill(`s:${f.key}`, f.hue, spec.s, f.lit);
   ctx.fill();
 
-  // body shading + pattern
+  // pattern + 背脊高光（需要裁剪，形状不出界）
   ctx.save();
   bodyPath(ctx);
   ctx.clip();
-  ctx.fillStyle = hsl(f.hue - 8, spec.s * 0.9, f.lit * 0.52, 0.42);
-  ctx.fillRect(-1.25, -0.7, 2.6, 0.73);
-  ctx.fillStyle = hsl(f.hue + 12, 62, 89, 0.34);
-  ctx.fillRect(-1.25, 0.07, 2.6, 0.6);
   if (spec.pat === 1) {
-    ctx.fillStyle = 'rgba(8,28,38,.2)';
-    for (let i = 0; i < 3; i++) ctx.fillRect(-0.56 + i * 0.35, -0.62, 0.1, 1.22);
+    // 条纹收窄、压淡，并且不到边，避免"笼子栏杆"的观感
+    ctx.fillStyle = 'rgba(8,28,38,.13)';
+    for (let i = 0; i < 3; i++) ctx.fillRect(-0.52 + i * 0.34, -0.5, 0.075, 1.0);
   } else if (spec.pat === 2) {
-    ctx.fillStyle = 'rgba(255,255,255,.24)';
+    ctx.fillStyle = 'rgba(255,255,255,.18)';
     const dots = [[-0.42, -0.18], [-0.04, 0.1], [0.32, -0.16], [-0.18, 0.22], [0.12, -0.03]];
-    for (const [x, y] of dots) { ctx.beginPath(); ctx.arc(x, y, 0.072, 0, TAU); ctx.fill(); }
+    for (const [x, y] of dots) { ctx.beginPath(); ctx.arc(x, y, 0.06, 0, TAU); ctx.fill(); }
   }
-  ctx.fillStyle = 'rgba(255,255,255,.16)';
+  // 背脊一条柔和高光
+  ctx.fillStyle = 'rgba(255,255,255,.085)';
   ctx.beginPath();
-  ctx.ellipse(0.38, -0.24, 0.32, 0.09, -0.26, 0, TAU);
+  ctx.ellipse(0.28, -0.28, 0.3, 0.05, -0.22, 0, TAU);
   ctx.fill();
   ctx.restore();
 
@@ -138,37 +186,41 @@ export function drawFish(f) {
     ctx.lineWidth = 0.028;
     ctx.stroke();
     ctx.beginPath();
-    for (let i = 0; i < 4; i++) {
-      const x = 0.52 + i * 0.115;
-      ctx.moveTo(x, 0.07);
-      ctx.lineTo(x + 0.05, 0.2);
-      ctx.lineTo(x + 0.1, 0.07);
+    for (let i = 0; i < 3; i++) {
+      const x = 0.58 + i * 0.115;
+      ctx.moveTo(x, 0.075);
+      ctx.lineTo(x + 0.038, 0.155);
+      ctx.lineTo(x + 0.076, 0.075);
     }
-    ctx.fillStyle = 'rgba(238,255,250,.8)';
+    ctx.fillStyle = 'rgba(232,250,246,.62)';
     ctx.fill();
   }
 
-  // eye
-  const eyeR = spec.pred ? 0.13 : 0.115;
+  // eye：缩小眼白 + 虹膜 + 细分瞳孔，去掉"鼓眼球"的玩具感
+  const eyeR = spec.pred ? 0.104 : 0.09;
   ctx.beginPath();
-  ctx.arc(0.62, -0.14, eyeR, 0, TAU);
-  ctx.fillStyle = 'rgba(242,255,252,.92)';
+  ctx.arc(0.615, -0.145, eyeR, 0, TAU);
+  ctx.fillStyle = 'rgba(240,252,250,.88)';
   ctx.fill();
   ctx.beginPath();
-  ctx.arc(0.648, -0.14, eyeR * 0.58, 0, TAU);
-  ctx.fillStyle = spec.pred ? '#1a0407' : '#071820';
+  ctx.arc(0.628, -0.145, eyeR * 0.72, 0, TAU);
+  ctx.fillStyle = spec.pred ? 'rgba(96,12,20,.92)' : 'rgba(12,44,58,.9)';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(0.636, -0.145, eyeR * 0.36, 0, TAU);
+  ctx.fillStyle = '#04141a';
   ctx.fill();
   if (spec.pred) {
     ctx.globalCompositeOperation = 'lighter';
     ctx.beginPath();
-    ctx.arc(0.648, -0.14, eyeR * 0.85, 0, TAU);
-    ctx.fillStyle = `rgba(255,64,80,${0.3 + 0.3 * Math.sin(time * 5 + f.seed)})`;
+    ctx.arc(0.628, -0.145, eyeR * 0.9, 0, TAU);
+    ctx.fillStyle = `rgba(255,60,76,${0.16 + 0.14 * Math.sin(time * 5 + f.seed)})`;
     ctx.fill();
     ctx.globalCompositeOperation = 'source-over';
   }
   ctx.beginPath();
-  ctx.arc(0.668, -0.166, eyeR * 0.22, 0, TAU);
-  ctx.fillStyle = 'rgba(255,255,255,.9)';
+  ctx.arc(0.648, -0.168, eyeR * 0.17, 0, TAU);
+  ctx.fillStyle = 'rgba(255,255,255,.85)';
   ctx.fill();
 
   // angler lure
@@ -328,7 +380,6 @@ export function drawPlayer() {
 
   const spec = PLAYER_SPEC;
   const sway = Math.sin(player.phase) * 0.18;
-  const finCol = hsl(spec.fin[0], spec.fin[1], spec.fin[2], 0.86);
 
   // tail
   ctx.beginPath();
@@ -337,18 +388,26 @@ export function drawPlayer() {
   ctx.quadraticCurveTo(-1.16, sway * 0.5, -1.44, 0.55 + sway);
   ctx.quadraticCurveTo(-1.02, 0.19 + sway * 0.4, -0.66, 0);
   ctx.closePath();
-  ctx.fillStyle = finCol;
+  ctx.fillStyle = tailFill('hero', spec.h, spec.s, spec.l, spec.fin);
   ctx.fill();
 
-  // dorsal fin
+  // dorsal fin：后掠尖鳍
   ctx.beginPath();
-  ctx.moveTo(0.18, -0.4);
-  ctx.quadraticCurveTo(-0.04, -0.86, -0.4, -0.6);
-  ctx.quadraticCurveTo(-0.54, -0.45, -0.58, -0.31);
+  ctx.moveTo(0.2, -0.31);
+  ctx.lineTo(-0.18, -0.84);
+  ctx.quadraticCurveTo(-0.5, -0.66, -0.64, -0.29);
   ctx.closePath();
-  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = dorsalFill('hero', spec.h, spec.s, spec.l, spec.fin);
   ctx.fill();
-  ctx.globalAlpha = 1;
+
+  // anal fin
+  ctx.beginPath();
+  ctx.moveTo(-0.06, 0.31);
+  ctx.lineTo(-0.34, 0.62);
+  ctx.quadraticCurveTo(-0.55, 0.52, -0.6, 0.31);
+  ctx.closePath();
+  ctx.fillStyle = hsl(spec.fin[0], spec.fin[1], spec.fin[2], 0.88);
+  ctx.fill();
 
   // pectoral fin
   ctx.save();
@@ -360,25 +419,21 @@ export function drawPlayer() {
   ctx.fill();
   ctx.restore();
 
-  // body
+  // body：渐变色画出体积，替代原来的两条硬色带
   bodyPath(ctx);
-  ctx.fillStyle = hsl(spec.h, spec.s, spec.l);
+  ctx.fillStyle = bodyFill('hero', spec.h, spec.s, spec.l);
   ctx.fill();
 
   ctx.save();
   bodyPath(ctx);
   ctx.clip();
-  ctx.fillStyle = hsl(spec.h - 9, 70, 30, 0.45);
-  ctx.fillRect(-1.25, -0.72, 2.6, 0.7);
-  ctx.fillStyle = hsl(168, 88, 88, 0.5);
-  ctx.fillRect(-1.25, 0.08, 2.6, 0.6);
-  // stripes
-  ctx.fillStyle = 'rgba(6,40,46,.22)';
-  for (let i = 0; i < 3; i++) ctx.fillRect(-0.56 + i * 0.35, -0.62, 0.085, 1.24);
+  // 条纹收窄压淡，不到边
+  ctx.fillStyle = 'rgba(6,40,46,.14)';
+  for (let i = 0; i < 3; i++) ctx.fillRect(-0.52 + i * 0.34, -0.5, 0.065, 1.0);
   // iridescent streak
-  ctx.fillStyle = 'rgba(210,255,250,.22)';
+  ctx.fillStyle = 'rgba(210,255,250,.12)';
   ctx.beginPath();
-  ctx.ellipse(0.4, -0.23, 0.34, 0.08, -0.28, 0, TAU);
+  ctx.ellipse(0.32, -0.27, 0.3, 0.05, -0.24, 0, TAU);
   ctx.fill();
   ctx.restore();
 
@@ -388,18 +443,22 @@ export function drawPlayer() {
   ctx.lineWidth = 0.03;
   ctx.stroke();
 
-  // eye
+  // eye：与鱼同款，缩小眼白 + 虹膜
   ctx.beginPath();
-  ctx.arc(0.62, -0.14, 0.125, 0, TAU);
-  ctx.fillStyle = 'rgba(248,255,252,.97)';
+  ctx.arc(0.615, -0.145, 0.095, 0, TAU);
+  ctx.fillStyle = 'rgba(246,255,253,.94)';
   ctx.fill();
   ctx.beginPath();
-  ctx.arc(0.648, -0.14, 0.072, 0, TAU);
-  ctx.fillStyle = '#061a20';
+  ctx.arc(0.628, -0.145, 0.068, 0, TAU);
+  ctx.fillStyle = 'rgba(14,52,64,.92)';
   ctx.fill();
   ctx.beginPath();
-  ctx.arc(0.67, -0.17, 0.026, 0, TAU);
-  ctx.fillStyle = 'rgba(255,255,255,.95)';
+  ctx.arc(0.636, -0.145, 0.034, 0, TAU);
+  ctx.fillStyle = '#04141a';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(0.648, -0.168, 0.016, 0, TAU);
+  ctx.fillStyle = 'rgba(255,255,255,.92)';
   ctx.fill();
 
   ctx.restore();

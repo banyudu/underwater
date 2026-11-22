@@ -2,7 +2,7 @@
 // spd = 基准速度，teeth/lure/pred/glow = 特征开关。
 
 export const SPECS = {
-  clown:     { h: 24,  s: 88, l: 57, fin: [44, 96, 63],  pat: 1, spd: 152 },
+  clown:     { h: 24,  s: 88, l: 57, fin: [34, 92, 64],  pat: 1, spd: 152 },
   cyan:      { h: 186, s: 82, l: 61, fin: [188, 90, 72], pat: 0, spd: 168 },
   lemon:     { h: 48,  s: 92, l: 63, fin: [42, 96, 67],  pat: 2, spd: 158 },
   rose:      { h: 332, s: 72, l: 67, fin: [336, 82, 76], pat: 1, spd: 142 },

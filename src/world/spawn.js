@@ -4,6 +4,7 @@ import { TAU, clamp, rand, pick } from '../core/math.js';
 import { onResize, W, H } from '../core/viewport.js';
 import { world, depthM } from './world.js';
 import { SPECS, FOOD_KEYS, DEEP_FOOD, PRED_KEYS, DEEP_PRED } from '../config/species.js';
+import { PREDATOR } from '../config/tuning.js';
 import { viewHW, viewHH, viewArea } from '../systems/view.js';
 
 // 数量上限按可视面积缩放，桌面和手机都能保持合适密度。
@@ -21,6 +22,29 @@ export function spawnPos(init, margin = 1.12) {
   return { x: world.cam.x + Math.cos(ang) * hw * m, y: world.cam.y + Math.sin(ang) * hh * m };
 }
 
+/**
+ * 把生成点推到离玩家至少 minDist 的位置。
+ * y 被夹到水面以下时，用水平分量补足距离，避免"贴着水面刷在脸上"。
+ */
+function ensureDistance(x, y, minDist) {
+  const player = world.player;
+  const dx = x - player.x, dy = y - player.y;
+  const d = Math.hypot(dx, dy);
+  if (d >= minDist) return [x, y];
+
+  const nx = d < 1e-3 ? 0 : dx / d;
+  const ny = d < 1e-3 ? -1 : dy / d;
+  let qx = player.x + nx * minDist;
+  let qy = player.y + ny * minDist;
+
+  if (qy < 120) {
+    qy = 120;
+    const need = Math.sqrt(Math.max(0, minDist * minDist - (qy - player.y) ** 2));
+    qx = player.x + (nx >= 0 ? need : -need);
+  }
+  return [qx, qy];
+}
+
 export function addFish(init) {
   const d = depthM();
   const player = world.player;
@@ -28,11 +52,13 @@ export function addFish(init) {
   const roll = Math.random();
   let r, key;
   const deep = d > 85;
+  const smallUpTo = 1 - PREDATOR.midShare - PREDATOR.share;
+  const midUpTo = smallUpTo + PREDATOR.midShare;
 
-  if (roll < 0.56) {
+  if (roll < smallUpTo) {
     r = pr * rand(0.22, 0.74);
     key = pick(deep && Math.random() < 0.5 ? DEEP_FOOD : FOOD_KEYS);
-  } else if (roll < 0.8) {
+  } else if (roll < midUpTo) {
     r = pr * rand(0.84, 1.04);
     key = pick(deep ? DEEP_FOOD : FOOD_KEYS);
   } else {
@@ -51,14 +77,30 @@ export function addFish(init) {
     pos.x = player.x + Math.cos(a) * dd;
     pos.y = player.y + Math.sin(a) * dd;
   }
+
+  // 先做水面上限限制，再保证猎手的安全距离。
+  // 顺序很重要：以前先算距离、后 clamp(y)，靠近水面时生成的猎手会被
+  // clamp 到 y=120，离玩家只有几像素——等于贴脸刷怪。
+  let sx = pos.x;
+  let sy = clamp(pos.y, 120, 30000);
+  if (spec.pred) {
+    [sx, sy] = ensureDistance(sx, sy, PREDATOR.spawnSafeDist);
+  }
+
   const f = {
-    x: pos.x, y: clamp(pos.y, 120, 30000), vx: 0, vy: 0, r,
+    x: sx, y: sy, vx: 0, vy: 0, r,
     spec, key,
     hue: spec.h + rand(-9, 9),
     lit: spec.l + rand(-5, 5),
     phase: rand(TAU), seed: rand(100),
     hunt: 0, giveup: 0, lunge: 0, lungeCd: rand(0.5, 3), danger: 0,
     faceDir: 1, pitch: 0,
+    // 巡游朝向与翻转迟滞，避免来回摆动
+    flipT: 0,
+    turnCd: rand(2, 9), cruise: rand(-0.4, 0.4), cruiseT: rand(TAU),
+    // 扑咬前摇 + 出生冷静期
+    windup: 0,
+    calm: spec.pred ? PREDATOR.spawnGrace + rand(0, 0.8) : 0,
   };
   f.lungeCd = rand(0.5, 3);
   world.fishes.push(f);

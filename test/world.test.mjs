@@ -7,6 +7,9 @@ import { installMockDOM, seedRandom } from '../tools/mock-dom.mjs';
 installMockDOM({ width: 1440, height: 900, dpr: 2 });
 seedRandom(12345);
 
+const { resize: resizeViewport } = await import('../src/core/viewport.js');
+resizeViewport();   // W/H 为 0 会让生成数量逻辑退化
+
 const { world, depthM } = await import('../src/world/world.js');
 const { resetWorld, fishTarget, foodTarget, jellyTarget } = await import('../src/world/spawn.js');
 const { grow, collide } = await import('../src/systems/collision.js');

@@ -429,7 +429,7 @@
 
   // src/config/species.js
   var SPECS = {
-    clown: { h: 24, s: 88, l: 57, fin: [44, 96, 63], pat: 1, spd: 152 },
+    clown: { h: 24, s: 88, l: 57, fin: [34, 92, 64], pat: 1, spd: 152 },
     cyan: { h: 186, s: 82, l: 61, fin: [188, 90, 72], pat: 0, spd: 168 },
     lemon: { h: 48, s: 92, l: 63, fin: [42, 96, 67], pat: 2, spd: 158 },
     rose: { h: 332, s: 72, l: 67, fin: [336, 82, 76], pat: 1, spd: 142 },
@@ -444,6 +444,65 @@
   var DEEP_FOOD = ["cyan", "glow", "rose"];
   var PRED_KEYS = ["barracuda", "shark"];
   var DEEP_PRED = ["angler", "shark"];
+
+  // src/config/tuning.js
+  var PLAYER = {
+    speed: 352,
+    // 常态最高速
+    boostSpeed: 560
+    // 加速最高速
+  };
+  var FISH = {
+    // 巡游：直线为主 + 缓慢俯仰摆动，换向是低频的显式决策。
+    // 原来每帧用 noise 重算目标角（还乘了 TAU*2），噪声稍动就转几十度，
+    // 鱼会不停画圈、来回掉头。
+    turnEveryMin: 5,
+    // 两次换向决策之间的最短间隔（秒）
+    turnEveryMax: 11,
+    turnChance: 0.35,
+    // 到点时真的掉头的概率，其余只调整俯仰基准
+    cruisePitch: 0.45,
+    // 俯仰基准的随机范围（弧度）
+    pitchWave: 0.22,
+    // 叠加的正弦摆动幅度
+    pitchNoise: 0.3,
+    // 叠加的噪声摆动幅度
+    // 朝向翻转迟滞：vx 穿零时立刻镜像会让鱼左右抖动
+    flipHold: 0.22,
+    // 需要持续这么久才真的翻
+    flipMinSpeed: 26
+    // 低于这个速度不翻朝向（悬停时不抖）
+  };
+  var PREDATOR = {
+    share: 0.12,
+    // 新生成鱼中捕食者占比（原为 0.20）
+    midShare: 0.28,
+    // 与玩家体型相仿的比例
+    huntRadius: 460,
+    huntSpeedMul: 1.2,
+    // 追击速度倍率：仍低于玩家常态，跑得掉
+    // 扑咬拆成"前摇 → 冲刺 → 冷却"，给玩家反应窗口
+    windup: 0.28,
+    // 前摇时长，此时减速并亮红框作为提示
+    windupSpeedMul: 0.45,
+    lungeDur: 0.34,
+    lungeSpeedMul: 1.3,
+    // 冲刺速度：低于玩家常态，不加速也逃得掉
+    lungeCdMin: 3.5,
+    lungeCdMax: 6,
+    // 原为 2.4~4，拉开间隔以减少连续压迫
+    // 同时处于"追击"状态的猎手上限。不设上限时会出现被一圈猎手围殴，
+    // 无论怎么操作都在挨咬。
+    maxHunters: 2,
+    // 一次扑咬结束后强制脱战几秒，给玩家喘息和反击窗口。
+    disengageMin: 2.5,
+    disengageMax: 4.5,
+    spawnSafeDist: 320,
+    // 生成时离玩家至少这么远
+    spawnGrace: 1.6,
+    // 刚出生的捕食者先"没看见"玩家
+    lungeRadius: 250
+  };
 
   // src/systems/view.js
   var viewHW = () => W / (2 * world.cam.z);
@@ -469,6 +528,22 @@
     const m = rand(margin, margin + 0.26);
     return { x: world.cam.x + Math.cos(ang) * hw * m, y: world.cam.y + Math.sin(ang) * hh * m };
   }
+  function ensureDistance(x, y, minDist) {
+    const player = world.player;
+    const dx = x - player.x, dy = y - player.y;
+    const d = Math.hypot(dx, dy);
+    if (d >= minDist) return [x, y];
+    const nx = d < 1e-3 ? 0 : dx / d;
+    const ny = d < 1e-3 ? -1 : dy / d;
+    let qx = player.x + nx * minDist;
+    let qy = player.y + ny * minDist;
+    if (qy < 120) {
+      qy = 120;
+      const need = Math.sqrt(Math.max(0, minDist * minDist - (qy - player.y) ** 2));
+      qx = player.x + (nx >= 0 ? need : -need);
+    }
+    return [qx, qy];
+  }
   function addFish(init) {
     const d = depthM();
     const player = world.player;
@@ -476,10 +551,12 @@
     const roll = Math.random();
     let r, key;
     const deep = d > 85;
-    if (roll < 0.56) {
+    const smallUpTo = 1 - PREDATOR.midShare - PREDATOR.share;
+    const midUpTo = smallUpTo + PREDATOR.midShare;
+    if (roll < smallUpTo) {
       r = pr * rand(0.22, 0.74);
       key = pick(deep && Math.random() < 0.5 ? DEEP_FOOD : FOOD_KEYS);
-    } else if (roll < 0.8) {
+    } else if (roll < midUpTo) {
       r = pr * rand(0.84, 1.04);
       key = pick(deep ? DEEP_FOOD : FOOD_KEYS);
     } else {
@@ -496,9 +573,14 @@
       pos.x = player.x + Math.cos(a) * dd;
       pos.y = player.y + Math.sin(a) * dd;
     }
+    let sx = pos.x;
+    let sy = clamp(pos.y, 120, 3e4);
+    if (spec.pred) {
+      [sx, sy] = ensureDistance(sx, sy, PREDATOR.spawnSafeDist);
+    }
     const f = {
-      x: pos.x,
-      y: clamp(pos.y, 120, 3e4),
+      x: sx,
+      y: sy,
       vx: 0,
       vy: 0,
       r,
@@ -514,7 +596,15 @@
       lungeCd: rand(0.5, 3),
       danger: 0,
       faceDir: 1,
-      pitch: 0
+      pitch: 0,
+      // 巡游朝向与翻转迟滞，避免来回摆动
+      flipT: 0,
+      turnCd: rand(2, 9),
+      cruise: rand(-0.4, 0.4),
+      cruiseT: rand(TAU),
+      // 扑咬前摇 + 出生冷静期
+      windup: 0,
+      calm: spec.pred ? PREDATOR.spawnGrace + rand(0, 0.8) : 0
     };
     f.lungeCd = rand(0.5, 3);
     world.fishes.push(f);
@@ -824,7 +914,7 @@
       iy = dy / dd * st;
       boost = Math.sin(world.time * 0.31) > 0.74;
     }
-    const spdMax = (boost ? 560 : 352) * (1 - Math.min(0.16, player.r / 720));
+    const spdMax = (boost ? PLAYER.boostSpeed : PLAYER.speed) * (1 - Math.min(0.16, player.r / 720));
     const k = 1 - Math.exp(-(boost ? 7.5 : 5.5) * dt);
     player.vx += (ix * spdMax - player.vx) * k;
     player.vy += (iy * spdMax - player.vy) * k;
@@ -860,22 +950,30 @@
     const { fishes, player, cam } = world;
     const px = player.x, py = player.y, pr = player.r;
     const hunting = world.mode === "play";
+    let hunters = 0;
     for (const f of fishes) {
       const dx = px - f.x, dy = py - f.y;
       const dist = Math.hypot(dx, dy) || 1;
       const isPred = f.r > pr * 1.12;
       let ax = 0, ay = 0, spd = f.spec.spd;
       f.danger = Math.max(0, f.danger - dt * 1.8);
+      const wasLunging = f.lunge > 0;
       f.lunge = Math.max(0, f.lunge - dt);
       f.lungeCd -= dt;
-      if (hunting && isPred && dist < 460 && f.giveup <= 0) {
+      if (f.calm > 0) f.calm -= dt;
+      if (wasLunging && f.lunge <= 0) {
+        f.giveup = rand(PREDATOR.disengageMin, PREDATOR.disengageMax);
+        f.hunt = 0;
+      }
+      if (hunting && isPred && f.calm <= 0 && hunters < PREDATOR.maxHunters && dist < PREDATOR.huntRadius && f.giveup <= 0) {
+        hunters++;
         const lead = 0.16;
         const tx = px + player.vx * lead - f.x;
         const ty = py + player.vy * lead - f.y;
         const m = Math.hypot(tx, ty) || 1;
         ax = tx / m;
         ay = ty / m;
-        spd *= 1.2;
+        spd *= PREDATOR.huntSpeedMul;
         f.danger = 1;
         f.hunt += dt;
         if (f.hunt > 6) {
@@ -889,18 +987,30 @@
         f.hunt = Math.max(0, f.hunt - dt * 2);
       } else {
         f.giveup = Math.max(0, f.giveup - dt);
-        const a = noise1(f.seed + world.time * 0.22) * TAU * 2;
-        ax = Math.cos(a);
-        ay = Math.sin(a) * 0.62;
+        f.turnCd -= dt;
+        if (f.turnCd <= 0) {
+          f.turnCd = rand(FISH.turnEveryMin, FISH.turnEveryMax);
+          if (Math.random() < FISH.turnChance) f.faceDir = -f.faceDir;
+          f.cruise = rand(-FISH.cruisePitch, FISH.cruisePitch);
+        }
+        f.cruiseT += dt;
+        const pitchOff = f.cruise + Math.sin(f.cruiseT * 0.8 + f.seed) * FISH.pitchWave + (noise1(f.seed + world.time * 0.3) - 0.5) * FISH.pitchNoise;
+        ax = f.faceDir * Math.cos(pitchOff);
+        ay = Math.sin(pitchOff) * 0.85;
         spd *= 0.52;
         f.hunt = Math.max(0, f.hunt - dt * 2);
       }
-      if (hunting && f.danger > 0.5 && dist < 250 && f.lungeCd <= 0) {
-        f.lunge = 0.5;
-        f.lungeCd = rand(2.4, 4);
+      if (f.windup > 0) {
+        f.windup -= dt;
+        spd *= PREDATOR.windupSpeedMul;
+        if (f.windup <= 0) f.lunge = PREDATOR.lungeDur;
+      } else if (f.lunge > 0) {
+        spd *= PREDATOR.lungeSpeedMul;
+      } else if (hunting && f.calm <= 0 && f.danger > 0.5 && dist < PREDATOR.lungeRadius && f.lungeCd <= 0) {
+        f.windup = PREDATOR.windup;
+        f.lungeCd = rand(PREDATOR.lungeCdMin, PREDATOR.lungeCdMax);
         f.danger = 1;
       }
-      if (f.lunge > 0) spd *= 1.75;
       const k = 1 - Math.exp(-1.9 * dt);
       f.vx += (ax * spd - f.vx) * k;
       f.vy += (ay * spd - f.vy) * k;
@@ -910,8 +1020,17 @@
       if (f.y < 128) f.vy += 200 * dt;
       const sp = Math.hypot(f.vx, f.vy);
       if (sp > 18) {
-        f.faceDir = f.vx < 0 ? -1 : 1;
         f.pitch = clamp(Math.atan2(f.vy, Math.abs(f.vx) + 30), -1.02, 1.02);
+        const want = f.vx < 0 ? -1 : 1;
+        if (sp > FISH.flipMinSpeed && want !== f.faceDir) {
+          f.flipT += dt;
+          if (f.flipT >= FISH.flipHold) {
+            f.faceDir = want;
+            f.flipT = 0;
+          }
+        } else {
+          f.flipT = 0;
+        }
       }
       f.phase += dt * (4 + sp * 0.05);
     }
@@ -1444,6 +1563,43 @@
   }
 
   // src/render/creatures.js
+  var gradCache = /* @__PURE__ */ new Map();
+  function cached(key, make) {
+    let g = gradCache.get(key);
+    if (!g) {
+      g = make();
+      gradCache.set(key, g);
+    }
+    return g;
+  }
+  function bodyFill(tag, hue, sat, lit) {
+    const ck = `b|${tag}|${Math.round(hue / 4)}|${Math.round(lit / 3)}`;
+    return cached(ck, () => {
+      const g = ctx.createLinearGradient(0, -0.56, 0, 0.56);
+      g.addColorStop(0, hsl(hue, sat * 0.9, lit * 0.7));
+      g.addColorStop(0.46, hsl(hue, sat, lit));
+      g.addColorStop(1, hsl(hue + 5, sat * 0.55, Math.min(96, lit * 1.45)));
+      return g;
+    });
+  }
+  function tailFill(tag, hue, sat, lit, fin) {
+    const ck = `t|${tag}|${Math.round(hue / 4)}|${Math.round(lit / 3)}`;
+    return cached(ck, () => {
+      const g = ctx.createLinearGradient(-0.6, 0, -1.5, 0);
+      g.addColorStop(0, hsl(hue, sat * 0.8, lit * 0.95, 0.95));
+      g.addColorStop(1, hsl(fin[0], fin[1], fin[2], 0.95));
+      return g;
+    });
+  }
+  function dorsalFill(tag, hue, sat, lit, fin) {
+    const ck = `d|${tag}|${Math.round(hue / 4)}|${Math.round(lit / 3)}`;
+    return cached(ck, () => {
+      const g = ctx.createLinearGradient(0, -0.24, 0, -0.82);
+      g.addColorStop(0, hsl(hue, sat * 0.92, lit * 0.86, 0.96));
+      g.addColorStop(1, hsl(fin[0], fin[1], fin[2], 0.88));
+      return g;
+    });
+  }
   function bodyPath(g) {
     g.beginPath();
     g.moveTo(1, 0);
@@ -1459,7 +1615,6 @@
     const s = f.r;
     const spec = f.spec;
     const sway = Math.sin(f.phase) * 0.16;
-    const finCol = hsl(spec.fin[0], spec.fin[1], spec.fin[2], 0.82);
     const deep = clamp((depthM() - 45) / 170, 0, 1);
     ctx.save();
     ctx.translate(f.x, f.y);
@@ -1483,16 +1638,22 @@
     ctx.quadraticCurveTo(-1.15, sway * 0.5, -1.42, 0.52 + sway);
     ctx.quadraticCurveTo(-1.02, 0.18 + sway * 0.4, -0.66, 0);
     ctx.closePath();
-    ctx.fillStyle = finCol;
+    ctx.fillStyle = tailFill(`s:${f.key}`, f.hue, spec.s, f.lit, spec.fin);
     ctx.fill();
     ctx.beginPath();
-    ctx.moveTo(0.16, -0.39);
-    ctx.quadraticCurveTo(-0.06, -0.8, -0.4, -0.58);
-    ctx.quadraticCurveTo(-0.52, -0.44, -0.56, -0.31);
+    ctx.moveTo(0.18, -0.3);
+    ctx.lineTo(-0.16, -0.78);
+    ctx.quadraticCurveTo(-0.48, -0.62, -0.62, -0.28);
     ctx.closePath();
-    ctx.globalAlpha = 0.82;
+    ctx.fillStyle = dorsalFill(`s:${f.key}`, f.hue, spec.s, f.lit, spec.fin);
     ctx.fill();
-    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.moveTo(-0.08, 0.3);
+    ctx.lineTo(-0.34, 0.6);
+    ctx.quadraticCurveTo(-0.54, 0.5, -0.58, 0.3);
+    ctx.closePath();
+    ctx.fillStyle = hsl(spec.fin[0], spec.fin[1], spec.fin[2], 0.85);
+    ctx.fill();
     ctx.save();
     ctx.translate(0.24, 0.17);
     ctx.rotate(0.34 + Math.sin(f.phase * 1.4) * 0.22);
@@ -1502,30 +1663,26 @@
     ctx.fill();
     ctx.restore();
     bodyPath(ctx);
-    ctx.fillStyle = hsl(f.hue, spec.s, f.lit);
+    ctx.fillStyle = bodyFill(`s:${f.key}`, f.hue, spec.s, f.lit);
     ctx.fill();
     ctx.save();
     bodyPath(ctx);
     ctx.clip();
-    ctx.fillStyle = hsl(f.hue - 8, spec.s * 0.9, f.lit * 0.52, 0.42);
-    ctx.fillRect(-1.25, -0.7, 2.6, 0.73);
-    ctx.fillStyle = hsl(f.hue + 12, 62, 89, 0.34);
-    ctx.fillRect(-1.25, 0.07, 2.6, 0.6);
     if (spec.pat === 1) {
-      ctx.fillStyle = "rgba(8,28,38,.2)";
-      for (let i = 0; i < 3; i++) ctx.fillRect(-0.56 + i * 0.35, -0.62, 0.1, 1.22);
+      ctx.fillStyle = "rgba(8,28,38,.13)";
+      for (let i = 0; i < 3; i++) ctx.fillRect(-0.52 + i * 0.34, -0.5, 0.075, 1);
     } else if (spec.pat === 2) {
-      ctx.fillStyle = "rgba(255,255,255,.24)";
+      ctx.fillStyle = "rgba(255,255,255,.18)";
       const dots = [[-0.42, -0.18], [-0.04, 0.1], [0.32, -0.16], [-0.18, 0.22], [0.12, -0.03]];
       for (const [x, y] of dots) {
         ctx.beginPath();
-        ctx.arc(x, y, 0.072, 0, TAU);
+        ctx.arc(x, y, 0.06, 0, TAU);
         ctx.fill();
       }
     }
-    ctx.fillStyle = "rgba(255,255,255,.16)";
+    ctx.fillStyle = "rgba(255,255,255,.085)";
     ctx.beginPath();
-    ctx.ellipse(0.38, -0.24, 0.32, 0.09, -0.26, 0, TAU);
+    ctx.ellipse(0.28, -0.28, 0.3, 0.05, -0.22, 0, TAU);
     ctx.fill();
     ctx.restore();
     if (deep > 0.02 || spec.glow) {
@@ -1563,35 +1720,39 @@
       ctx.lineWidth = 0.028;
       ctx.stroke();
       ctx.beginPath();
-      for (let i = 0; i < 4; i++) {
-        const x = 0.52 + i * 0.115;
-        ctx.moveTo(x, 0.07);
-        ctx.lineTo(x + 0.05, 0.2);
-        ctx.lineTo(x + 0.1, 0.07);
+      for (let i = 0; i < 3; i++) {
+        const x = 0.58 + i * 0.115;
+        ctx.moveTo(x, 0.075);
+        ctx.lineTo(x + 0.038, 0.155);
+        ctx.lineTo(x + 0.076, 0.075);
       }
-      ctx.fillStyle = "rgba(238,255,250,.8)";
+      ctx.fillStyle = "rgba(232,250,246,.62)";
       ctx.fill();
     }
-    const eyeR = spec.pred ? 0.13 : 0.115;
+    const eyeR = spec.pred ? 0.104 : 0.09;
     ctx.beginPath();
-    ctx.arc(0.62, -0.14, eyeR, 0, TAU);
-    ctx.fillStyle = "rgba(242,255,252,.92)";
+    ctx.arc(0.615, -0.145, eyeR, 0, TAU);
+    ctx.fillStyle = "rgba(240,252,250,.88)";
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(0.648, -0.14, eyeR * 0.58, 0, TAU);
-    ctx.fillStyle = spec.pred ? "#1a0407" : "#071820";
+    ctx.arc(0.628, -0.145, eyeR * 0.72, 0, TAU);
+    ctx.fillStyle = spec.pred ? "rgba(96,12,20,.92)" : "rgba(12,44,58,.9)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0.636, -0.145, eyeR * 0.36, 0, TAU);
+    ctx.fillStyle = "#04141a";
     ctx.fill();
     if (spec.pred) {
       ctx.globalCompositeOperation = "lighter";
       ctx.beginPath();
-      ctx.arc(0.648, -0.14, eyeR * 0.85, 0, TAU);
-      ctx.fillStyle = `rgba(255,64,80,${0.3 + 0.3 * Math.sin(time * 5 + f.seed)})`;
+      ctx.arc(0.628, -0.145, eyeR * 0.9, 0, TAU);
+      ctx.fillStyle = `rgba(255,60,76,${0.16 + 0.14 * Math.sin(time * 5 + f.seed)})`;
       ctx.fill();
       ctx.globalCompositeOperation = "source-over";
     }
     ctx.beginPath();
-    ctx.arc(0.668, -0.166, eyeR * 0.22, 0, TAU);
-    ctx.fillStyle = "rgba(255,255,255,.9)";
+    ctx.arc(0.648, -0.168, eyeR * 0.17, 0, TAU);
+    ctx.fillStyle = "rgba(255,255,255,.85)";
     ctx.fill();
     if (spec.lure) {
       const lx = 0.86 + Math.sin(time * 1.3 + f.seed) * 0.05;
@@ -1734,23 +1895,28 @@
     ctx.rotate(player.pitch);
     const spec = PLAYER_SPEC;
     const sway = Math.sin(player.phase) * 0.18;
-    const finCol = hsl(spec.fin[0], spec.fin[1], spec.fin[2], 0.86);
     ctx.beginPath();
     ctx.moveTo(-0.66, 0);
     ctx.quadraticCurveTo(-1.02, -0.19 + sway * 0.4, -1.44, -0.55 + sway);
     ctx.quadraticCurveTo(-1.16, sway * 0.5, -1.44, 0.55 + sway);
     ctx.quadraticCurveTo(-1.02, 0.19 + sway * 0.4, -0.66, 0);
     ctx.closePath();
-    ctx.fillStyle = finCol;
+    ctx.fillStyle = tailFill("hero", spec.h, spec.s, spec.l, spec.fin);
     ctx.fill();
     ctx.beginPath();
-    ctx.moveTo(0.18, -0.4);
-    ctx.quadraticCurveTo(-0.04, -0.86, -0.4, -0.6);
-    ctx.quadraticCurveTo(-0.54, -0.45, -0.58, -0.31);
+    ctx.moveTo(0.2, -0.31);
+    ctx.lineTo(-0.18, -0.84);
+    ctx.quadraticCurveTo(-0.5, -0.66, -0.64, -0.29);
     ctx.closePath();
-    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = dorsalFill("hero", spec.h, spec.s, spec.l, spec.fin);
     ctx.fill();
-    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.moveTo(-0.06, 0.31);
+    ctx.lineTo(-0.34, 0.62);
+    ctx.quadraticCurveTo(-0.55, 0.52, -0.6, 0.31);
+    ctx.closePath();
+    ctx.fillStyle = hsl(spec.fin[0], spec.fin[1], spec.fin[2], 0.88);
+    ctx.fill();
     ctx.save();
     ctx.translate(0.22, 0.18);
     ctx.rotate(0.36 + Math.sin(player.phase * 1.5) * 0.26);
@@ -1760,20 +1926,16 @@
     ctx.fill();
     ctx.restore();
     bodyPath(ctx);
-    ctx.fillStyle = hsl(spec.h, spec.s, spec.l);
+    ctx.fillStyle = bodyFill("hero", spec.h, spec.s, spec.l);
     ctx.fill();
     ctx.save();
     bodyPath(ctx);
     ctx.clip();
-    ctx.fillStyle = hsl(spec.h - 9, 70, 30, 0.45);
-    ctx.fillRect(-1.25, -0.72, 2.6, 0.7);
-    ctx.fillStyle = hsl(168, 88, 88, 0.5);
-    ctx.fillRect(-1.25, 0.08, 2.6, 0.6);
-    ctx.fillStyle = "rgba(6,40,46,.22)";
-    for (let i = 0; i < 3; i++) ctx.fillRect(-0.56 + i * 0.35, -0.62, 0.085, 1.24);
-    ctx.fillStyle = "rgba(210,255,250,.22)";
+    ctx.fillStyle = "rgba(6,40,46,.14)";
+    for (let i = 0; i < 3; i++) ctx.fillRect(-0.52 + i * 0.34, -0.5, 0.065, 1);
+    ctx.fillStyle = "rgba(210,255,250,.12)";
     ctx.beginPath();
-    ctx.ellipse(0.4, -0.23, 0.34, 0.08, -0.28, 0, TAU);
+    ctx.ellipse(0.32, -0.27, 0.3, 0.05, -0.24, 0, TAU);
     ctx.fill();
     ctx.restore();
     bodyPath(ctx);
@@ -1781,16 +1943,20 @@
     ctx.lineWidth = 0.03;
     ctx.stroke();
     ctx.beginPath();
-    ctx.arc(0.62, -0.14, 0.125, 0, TAU);
-    ctx.fillStyle = "rgba(248,255,252,.97)";
+    ctx.arc(0.615, -0.145, 0.095, 0, TAU);
+    ctx.fillStyle = "rgba(246,255,253,.94)";
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(0.648, -0.14, 0.072, 0, TAU);
-    ctx.fillStyle = "#061a20";
+    ctx.arc(0.628, -0.145, 0.068, 0, TAU);
+    ctx.fillStyle = "rgba(14,52,64,.92)";
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(0.67, -0.17, 0.026, 0, TAU);
-    ctx.fillStyle = "rgba(255,255,255,.95)";
+    ctx.arc(0.636, -0.145, 0.034, 0, TAU);
+    ctx.fillStyle = "#04141a";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0.648, -0.168, 0.016, 0, TAU);
+    ctx.fillStyle = "rgba(255,255,255,.92)";
     ctx.fill();
     ctx.restore();
   }

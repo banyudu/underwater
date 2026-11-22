@@ -1,6 +1,7 @@
 // 玩家操控：键鼠 / 指针引导 / 标题页自动巡航。
 
 import { clamp, rand } from '../core/math.js';
+import { PLAYER } from '../config/tuning.js';
 import { keys, pointer } from '../core/input.js';
 import { W, H } from '../core/viewport.js';
 import { world } from '../world/world.js';
@@ -38,7 +39,7 @@ export function updatePlayer(dt) {
     boost = Math.sin(world.time * 0.31) > 0.74;
   }
 
-  const spdMax = (boost ? 560 : 352) * (1 - Math.min(0.16, player.r / 720));
+  const spdMax = (boost ? PLAYER.boostSpeed : PLAYER.speed) * (1 - Math.min(0.16, player.r / 720));
   const k = 1 - Math.exp(-(boost ? 7.5 : 5.5) * dt);
   player.vx += (ix * spdMax - player.vx) * k;
   player.vy += (iy * spdMax - player.vy) * k;

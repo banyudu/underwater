@@ -1,6 +1,7 @@
 // 鱼群 AI：捕食 / 逃跑 / 巡游 + 突袭 + 互相分离 + 离屏回收。
 
-import { TAU, clamp, rand, noise1 } from '../core/math.js';
+import { clamp, rand, noise1 } from '../core/math.js';
+import { FISH, PREDATOR } from '../config/tuning.js';
 import { world } from '../world/world.js';
 import { addFish, fishTarget } from '../world/spawn.js';
 import { viewHW, viewHH } from './view.js';
@@ -9,6 +10,7 @@ export function updateFish(dt) {
   const { fishes, player, cam } = world;
   const px = player.x, py = player.y, pr = player.r;
   const hunting = world.mode === 'play';
+  let hunters = 0;
 
   for (const f of fishes) {
     const dx = px - f.x, dy = py - f.y;
@@ -17,16 +19,25 @@ export function updateFish(dt) {
     let ax = 0, ay = 0, spd = f.spec.spd;
 
     f.danger = Math.max(0, f.danger - dt * 1.8);
+    const wasLunging = f.lunge > 0;
     f.lunge = Math.max(0, f.lunge - dt);
     f.lungeCd -= dt;
+    if (f.calm > 0) f.calm -= dt;
+    // 扑咬收尾：强制脱战，避免"咬完接着咬"
+    if (wasLunging && f.lunge <= 0) {
+      f.giveup = rand(PREDATOR.disengageMin, PREDATOR.disengageMax);
+      f.hunt = 0;
+    }
 
-    if (hunting && isPred && dist < 460 && f.giveup <= 0) {
+    if (hunting && isPred && f.calm <= 0 && hunters < PREDATOR.maxHunters
+        && dist < PREDATOR.huntRadius && f.giveup <= 0) {
+      hunters++;
       const lead = 0.16;
       const tx = px + player.vx * lead - f.x;
       const ty = py + player.vy * lead - f.y;
       const m = Math.hypot(tx, ty) || 1;
       ax = tx / m; ay = ty / m;
-      spd *= 1.2;
+      spd *= PREDATOR.huntSpeedMul;
       f.danger = 1;
       f.hunt += dt;
       if (f.hunt > 6) { f.giveup = 5; f.hunt = 0; }
@@ -36,19 +47,37 @@ export function updateFish(dt) {
       f.hunt = Math.max(0, f.hunt - dt * 2);
     } else {
       f.giveup = Math.max(0, f.giveup - dt);
-      const a = noise1(f.seed + world.time * 0.22) * TAU * 2;
-      ax = Math.cos(a); ay = Math.sin(a) * 0.62;
+      // 巡游：以水平直线为主 + 缓慢俯仰摆动，换向是"偶发决策"而非每帧重算。
+      // 之前每帧用 noise 重算目标角（且乘以 TAU*2），噪声稍动就转几十度，
+      // 鱼会不停画圈、来回掉头。现在转向是显式的、低频的。
+      f.turnCd -= dt;
+      if (f.turnCd <= 0) {
+        f.turnCd = rand(FISH.turnEveryMin, FISH.turnEveryMax);
+        if (Math.random() < FISH.turnChance) f.faceDir = -f.faceDir;
+        f.cruise = rand(-FISH.cruisePitch, FISH.cruisePitch);
+      }
+      f.cruiseT += dt;
+      const pitchOff = f.cruise
+        + Math.sin(f.cruiseT * 0.8 + f.seed) * FISH.pitchWave
+        + (noise1(f.seed + world.time * 0.3) - 0.5) * FISH.pitchNoise;
+      ax = f.faceDir * Math.cos(pitchOff);
+      ay = Math.sin(pitchOff) * 0.85;
       spd *= 0.52;
       f.hunt = Math.max(0, f.hunt - dt * 2);
     }
 
-    // lunge attack
-    if (hunting && f.danger > 0.5 && dist < 250 && f.lungeCd <= 0) {
-      f.lunge = 0.5;
-      f.lungeCd = rand(2.4, 4);
+    // 扑咬：前摇（减速 + 红框提示）→ 冲刺 → 冷却
+    if (f.windup > 0) {
+      f.windup -= dt;
+      spd *= PREDATOR.windupSpeedMul;
+      if (f.windup <= 0) f.lunge = PREDATOR.lungeDur;
+    } else if (f.lunge > 0) {
+      spd *= PREDATOR.lungeSpeedMul;
+    } else if (hunting && f.calm <= 0 && f.danger > 0.5 && dist < PREDATOR.lungeRadius && f.lungeCd <= 0) {
+      f.windup = PREDATOR.windup;
+      f.lungeCd = rand(PREDATOR.lungeCdMin, PREDATOR.lungeCdMax);
       f.danger = 1;
     }
-    if (f.lunge > 0) spd *= 1.75;
 
     const k = 1 - Math.exp(-1.9 * dt);
     f.vx += (ax * spd - f.vx) * k;
@@ -61,8 +90,15 @@ export function updateFish(dt) {
 
     const sp = Math.hypot(f.vx, f.vy);
     if (sp > 18) {
-      f.faceDir = f.vx < 0 ? -1 : 1;
       f.pitch = clamp(Math.atan2(f.vy, Math.abs(f.vx) + 30), -1.02, 1.02);
+      // 朝向翻转加迟滞：vx 穿零时立刻镜像会让鱼左右抖动
+      const want = f.vx < 0 ? -1 : 1;
+      if (sp > FISH.flipMinSpeed && want !== f.faceDir) {
+        f.flipT += dt;
+        if (f.flipT >= FISH.flipHold) { f.faceDir = want; f.flipT = 0; }
+      } else {
+        f.flipT = 0;
+      }
     }
     f.phase += dt * (4 + sp * 0.05);
   }
