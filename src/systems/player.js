@@ -6,6 +6,7 @@ import { keys, pointer } from '../core/input.js';
 import { W, H } from '../core/viewport.js';
 import { world } from '../world/world.js';
 import { addBubble } from '../world/fx.js';
+import { slideAgainstTerrain } from '../world/terrain.js';
 
 export function updatePlayer(dt) {
   const player = world.player;
@@ -52,10 +53,25 @@ export function updatePlayer(dt) {
   // gentle current
   player.vx += Math.sin(world.time * 0.23 + 1.7) * 5 * dt;
 
+  const spdBefore = Math.hypot(player.vx, player.vy);
+
   player.x += player.vx * dt;
   player.y += player.vy * dt;
 
   if (player.y < 112) { player.y = 112; if (player.vy < 45) player.vy = 45; }
+
+  // 撞地形：沿表面滑动，而不是被抵住。
+  // 半径取 0.72 而不是外接圆：既能保留"小体型钻缝"的机制，
+  // 又不会让大体型玩家和石头的视觉外缘频繁粘连。
+  const blocked = slideAgainstTerrain(player, player.r * 0.72);
+  player.pinned = blocked && spdBefore < 40 ? (player.pinned || 0) + dt : 0;
+  if (player.pinned > 0.7) {
+    // 贴墙过久：沿切向推一把，避免在石头夹角里原地磨
+    const a = Math.atan2(player.y - world.cam.y, player.x - world.cam.x) + Math.PI / 2;
+    player.vx += Math.cos(a) * 90;
+    player.vy += Math.sin(a) * 90;
+    player.pinned = 0;
+  }
 
   const spd = Math.hypot(player.vx, player.vy);
   if (spd > 22) {

@@ -97,6 +97,12 @@ export function sfxHurt() {
   noiseHit(0.3, 0.22, 420, 90);
 }
 
+export function sfxSting() {
+  if (!AC) return;
+  blip(1180, 0.12, 'square', 0.05, -420);
+  noiseHit(0.14, 0.09, 2600, 900);
+}
+
 export function sfxChime() {
   if (!AC) return;
   blip(523, 0.5, 'sine', 0.06, 0);

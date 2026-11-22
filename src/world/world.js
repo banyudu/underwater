@@ -40,6 +40,11 @@ export const world = {
   mantas: [],
   vents: [],
 
+  // 地形（实心障碍）与底栖生物
+  terrain: [],
+  crabs: [],
+  turtles: [],
+
   // 触屏标记
   touchUI: false,
 };

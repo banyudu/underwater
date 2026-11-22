@@ -4,7 +4,7 @@ import { clamp } from '../core/math.js';
 import { world, depthM } from '../world/world.js';
 import { addJelly, relocateFood } from '../world/spawn.js';
 import { burst, addText, ring } from '../world/fx.js';
-import { sfxEat, sfxHurt } from '../world/audio.js';
+import { sfxEat, sfxHurt, sfxSting } from '../world/audio.js';
 
 export function grow(amount) {
   const player = world.player;
@@ -76,12 +76,33 @@ export function collide() {
     const j = jellies[i];
     const dx = j.x - player.x, dy = j.y - player.y;
     const reach = pr + j.r * 0.55;
-    if (dx * dx + dy * dy < reach * reach && pr > j.r * 0.72) {
+    if (dx * dx + dy * dy >= reach * reach) continue;
+
+    if (pr > j.r * 0.72) {
+      // 够大就能吃：水母是"风险/收益"型食物
       eatJelly(j);
       jellies.splice(i, 1);
       addJelly(false);
+    } else if (player.invuln <= 0) {
+      // 比它小还去碰，就被蜇——扣得比被咬少，但会有击退
+      sting(j);
     }
   }
+}
+
+/** 被水母蜇到：伤害比被猎手咬小，但有击退，手感上更像"烫了一下"。 */
+export function sting(j) {
+  const { player } = world;
+  player.invuln = 1.2;
+  player.r = Math.max(8.5, player.r * 0.94);
+  const a = Math.atan2(player.y - j.y, player.x - j.x);
+  player.vx += Math.cos(a) * 190;
+  player.vy += Math.sin(a) * 190;
+  world.shake = Math.max(world.shake, 6);
+  world.flash = Math.max(world.flash, 0.45);
+  burst(player.x, player.y, 9, 300, true);
+  addText(player.x, player.y - player.r * 1.3, '被蜇了', '#d9c6ff');
+  sfxSting();
 }
 
 export function hurt(f) {

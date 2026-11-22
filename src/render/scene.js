@@ -5,6 +5,8 @@ import { ctx, W, H, DPR } from '../core/viewport.js';
 import { world } from '../world/world.js';
 import { drawWater } from './background.js';
 import { drawKelp, drawMantas, drawShoals, drawVents } from './ambient.js';
+import { drawTerrain } from './terrain.js';
+import { drawCrabs, drawTurtles } from './benthos.js';
 import { drawFood, drawFish, drawJelly, drawPlayer } from './creatures.js';
 import { drawFx } from './fx.js';
 import { drawOverlay } from './overlay.js';
@@ -27,6 +29,9 @@ export function render(dt) {
   ctx.translate(-cam.x, -cam.y);
 
   drawVents();
+  drawTerrain();
+  drawCrabs();
+  drawTurtles();
   drawMantas();
   drawShoals();
   drawFood();

@@ -8,6 +8,8 @@ import { hudBest } from './core/dom.js';
 import { world } from './world/world.js';
 import { buildSnow, resetWorld } from './world/spawn.js';
 import { updateAmbient } from './world/ambient.js';
+import { updateTerrain } from './world/terrain.js';
+import { updateBenthos } from './world/benthos.js';
 import { addBubble, updateFx } from './world/fx.js';
 import { audioInit, setMuted, muted } from './world/audio.js';
 import { updatePlayer } from './systems/player.js';
@@ -41,7 +43,9 @@ export function update(dt) {
   updateFish(dt);
   updateJellies(dt);
   updateFoods(dt);
+  updateTerrain();
   updateAmbient(dt);
+  updateBenthos(dt);
   updateFx(dt);
   updateCamera(dt);
 

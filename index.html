@@ -426,6 +426,10 @@
     shoals: [],
     mantas: [],
     vents: [],
+    // 地形（实心障碍）与底栖生物
+    terrain: [],
+    crabs: [],
+    turtles: [],
     // 触屏标记
     touchUI: false
   };
@@ -711,6 +715,348 @@
     for (let i = 0; i < ventTarget(); i++) world.vents.push(makeVent(true));
   }
 
+  // src/world/terrain.js
+  var ROCK_MAX = 4;
+  var CAVE_MAX = 2;
+  var WRECK_MAX = 1;
+  function rockTarget() {
+    return clamp(Math.round(viewArea() / 26e4), 2, ROCK_MAX);
+  }
+  function caveTarget() {
+    return clamp(Math.round(viewArea() / 9e5), 0, CAVE_MAX);
+  }
+  function wreckTarget() {
+    if (depthM() < 70) return 0;
+    return Math.random() < 0.35 ? WRECK_MAX : 0;
+  }
+  function offscreenFar(x, y, mul = 2.2) {
+    return Math.abs(x - world.cam.x) > viewHW() * mul || Math.abs(y - world.cam.y) > viewHH() * mul;
+  }
+  function pickSpot(minGap) {
+    const hw = viewHW(), hh = viewHH();
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const x = world.cam.x + rand(-hw * 1.25, hw * 1.25);
+      const y = clamp(world.cam.y + rand(-hh * 1.15, hh * 1.15), 200, 3e4);
+      const dp = Math.hypot(x - world.player.x, y - world.player.y);
+      if (dp < Math.max(minGap, world.player.r * 8)) continue;
+      let clash = false;
+      for (const o of world.terrain) {
+        if (Math.hypot(x - o.x, y - o.y) < (o.r + minGap) * 0.72) {
+          clash = true;
+          break;
+        }
+      }
+      if (!clash) return { x, y };
+    }
+    return null;
+  }
+  function finalize(o) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const c of o.parts) {
+      if (c.x - c.r < minX) minX = c.x - c.r;
+      if (c.y - c.r < minY) minY = c.y - c.r;
+      if (c.x + c.r > maxX) maxX = c.x + c.r;
+      if (c.y + c.r > maxY) maxY = c.y + c.r;
+    }
+    o.minX = minX;
+    o.minY = minY;
+    o.maxX = maxX;
+    o.maxY = maxY;
+    return o;
+  }
+  function makeRock(init) {
+    const spot = init ? { x: world.cam.x + rand(-viewHW(), viewHW()), y: clamp(world.cam.y + rand(-viewHH(), viewHH()), 220, 3e4) } : pickSpot(200);
+    if (!spot) return null;
+    const r = rand(52, 118);
+    const parts = [{ x: spot.x, y: spot.y + r * 0.18, r: r * 0.78 }];
+    const lumps = 2 + (Math.random() * 3 | 0);
+    for (let i = 0; i < lumps; i++) {
+      const a = rand(TAU);
+      const d = rand(0, r * 0.55);
+      parts.push({
+        x: spot.x + Math.cos(a) * d,
+        y: spot.y + Math.sin(a) * d * 0.6 + r * 0.1,
+        r: rand(r * 0.42, r * 0.72)
+      });
+    }
+    return finalize({
+      kind: "rock",
+      x: spot.x,
+      y: spot.y,
+      r,
+      parts,
+      seed: rand(100),
+      hue: rand(196, 212),
+      lit: rand(17, 25),
+      // 石头上附着的珊瑚/海绵
+      coral: Array.from({ length: 2 + (Math.random() * 3 | 0) }, () => ({
+        ox: rand(-r * 0.62, r * 0.62),
+        oy: rand(-r * 0.72, -r * 0.15),
+        size: rand(9, 22),
+        hue: rand(300, 372) % 360,
+        kind: Math.random() < 0.5 ? "fan" : "tube",
+        ph: rand(TAU)
+      }))
+    });
+  }
+  function makeCave(init) {
+    const spot = init ? { x: world.cam.x + rand(-viewHW() * 0.75, viewHW() * 0.75), y: clamp(world.cam.y + rand(-viewHH() * 0.65, viewHH() * 0.65), 260, 3e4) } : pickSpot(320);
+    if (!spot) return null;
+    const gap = 76;
+    const cr = rand(52, 68);
+    const parts = [];
+    for (const side of [-1, 1]) {
+      const innerX = spot.x + side * (gap / 2 + cr);
+      parts.push({ x: innerX, y: spot.y, r: cr });
+      parts.push({ x: innerX + side * cr * 0.62, y: spot.y - cr * 0.52, r: cr * 0.78 });
+      parts.push({ x: innerX + side * cr * 0.55, y: spot.y + cr * 0.6, r: cr * 0.7 });
+    }
+    return finalize({
+      kind: "cave",
+      x: spot.x,
+      y: spot.y,
+      r: cr * 2.1,
+      parts,
+      gap,
+      outerR: cr * 2,
+      seed: rand(100),
+      hue: rand(200, 214),
+      lit: rand(15, 21),
+      coral: Array.from({ length: 3 + (Math.random() * 3 | 0) }, () => ({
+        ox: rand(-cr * 1.9, cr * 1.9),
+        oy: rand(-cr * 1.1, -cr * 0.25),
+        size: rand(10, 22),
+        hue: rand(300, 372) % 360,
+        kind: Math.random() < 0.5 ? "fan" : "tube",
+        ph: rand(TAU)
+      }))
+    });
+  }
+  function makeWreck(init) {
+    const spot = init ? { x: world.cam.x + rand(-viewHW() * 0.7, viewHW() * 0.7), y: clamp(world.cam.y + rand(-viewHH() * 0.5, viewHH() * 0.5), 300, 3e4) } : pickSpot(380);
+    if (!spot) return null;
+    const len = rand(190, 290);
+    const hullR = len * 0.16;
+    const tilt = rand(-0.5, 0.5);
+    const parts = [];
+    const segs = 4;
+    for (let i = 0; i < segs; i++) {
+      const t = (i / (segs - 1) - 0.5) * len * 0.78;
+      parts.push({
+        x: spot.x + Math.cos(tilt) * t,
+        y: spot.y + Math.sin(tilt) * t,
+        r: hullR * (1 - Math.abs(i / (segs - 1) - 0.5) * 0.5)
+      });
+    }
+    return finalize({
+      kind: "wreck",
+      x: spot.x,
+      y: spot.y,
+      r: len * 0.5,
+      parts,
+      len,
+      tilt,
+      hullR,
+      seed: rand(100),
+      hue: rand(30, 44),
+      lit: rand(15, 21),
+      coral: Array.from({ length: 4 + (Math.random() * 4 | 0) }, () => ({
+        ox: rand(-len * 0.4, len * 0.4),
+        oy: rand(-hullR * 0.9, hullR * 0.2),
+        size: rand(8, 18),
+        hue: rand(300, 372) % 360,
+        kind: Math.random() < 0.5 ? "fan" : "tube",
+        ph: rand(TAU)
+      }))
+    });
+  }
+  var OUT = { x: 0, y: 0 };
+  function collideTerrain(px, py, pr) {
+    let hit = false;
+    OUT.x = px;
+    OUT.y = py;
+    for (let pass = 0; pass < 6; pass++) {
+      let moved = false;
+      for (const o of world.terrain) {
+        if (OUT.x < o.minX - pr || OUT.x > o.maxX + pr) continue;
+        if (OUT.y < o.minY - pr || OUT.y > o.maxY + pr) continue;
+        for (const c of o.parts) {
+          const dx = OUT.x - c.x, dy = OUT.y - c.y;
+          const rr = c.r + pr;
+          const d2 = dx * dx + dy * dy;
+          if (d2 >= rr * rr) continue;
+          if (d2 < 1e-6) {
+            OUT.y -= rr;
+            moved = true;
+            hit = true;
+            continue;
+          }
+          const d = Math.sqrt(d2);
+          const push = (rr - d) / d;
+          OUT.x += dx * push;
+          OUT.y += dy * push;
+          moved = true;
+          hit = true;
+        }
+      }
+      if (!moved) break;
+    }
+    return hit ? OUT : null;
+  }
+  function slideAgainstTerrain(obj, radius) {
+    const hit = collideTerrain(obj.x, obj.y, radius);
+    if (!hit) return false;
+    const cx = hit.x - obj.x;
+    const cy = hit.y - obj.y;
+    obj.x = hit.x;
+    obj.y = hit.y;
+    const len = Math.hypot(cx, cy);
+    if (len > 1e-4) {
+      const nx = cx / len, ny = cy / len;
+      const vn = obj.vx * nx + obj.vy * ny;
+      if (vn < 0) {
+        obj.vx -= vn * nx;
+        obj.vy -= vn * ny;
+      }
+    }
+    return true;
+  }
+  function updateTerrain() {
+    const { terrain } = world;
+    for (let i = terrain.length - 1; i >= 0; i--) {
+      if (offscreenFar(terrain[i].x, terrain[i].y)) terrain.splice(i, 1);
+    }
+    const rocks = terrain.filter((o) => o.kind === "rock").length;
+    const caves = terrain.filter((o) => o.kind === "cave").length;
+    const wrecks = terrain.filter((o) => o.kind === "wreck").length;
+    if (rocks < rockTarget()) {
+      const o = clampBelowSurface(makeRock(terrain.length === 0));
+      if (o) terrain.push(o);
+    }
+    if (caves < caveTarget()) {
+      const o = clampBelowSurface(makeCave(false));
+      if (o) terrain.push(o);
+    }
+    if (wrecks < wreckTarget()) {
+      const o = clampBelowSurface(makeWreck(false));
+      if (o) terrain.push(o);
+    }
+  }
+  var SURFACE_MARGIN = 185;
+  function clampBelowSurface(o) {
+    if (!o) return o;
+    const shift = SURFACE_MARGIN - o.minY;
+    if (shift > 0) {
+      o.y += shift;
+      for (const c of o.parts) c.y += shift;
+      o.minY += shift;
+      o.maxY += shift;
+    }
+    return o;
+  }
+  function resetTerrain() {
+    world.terrain.length = 0;
+    const clear = (o) => o && Math.hypot(o.x - world.player.x, o.y - world.player.y) > world.player.r * 9;
+    for (let i = 0; i < rockTarget(); i++) {
+      const o = clampBelowSurface(makeRock(true));
+      if (clear(o)) world.terrain.push(o);
+    }
+    for (let i = 0; i < caveTarget(); i++) {
+      const o = clampBelowSurface(makeCave(true));
+      if (clear(o)) world.terrain.push(o);
+    }
+  }
+
+  // src/world/benthos.js
+  var CRAB_MAX = 4;
+  var TURTLE_MAX = 2;
+  function crabTarget() {
+    const rocks = world.terrain.filter((o) => o.kind === "rock").length;
+    return clamp(Math.round(Math.min(rocks, viewArea() / 4e5)), 0, CRAB_MAX);
+  }
+  function turtleTarget() {
+    return clamp(Math.round(viewArea() / 12e5), 0, TURTLE_MAX);
+  }
+  function makeCrab(host) {
+    return {
+      host,
+      // 在石头的上半弧上行走，a 是当前角度
+      a: rand(-Math.PI * 0.85, -Math.PI * 0.15),
+      dir: Math.random() < 0.5 ? -1 : 1,
+      speed: rand(0.25, 0.55),
+      ph: rand(TAU),
+      size: rand(4.2, 7)
+    };
+  }
+  function makeTurtle(init) {
+    const hw = viewHW(), hh = viewHH();
+    return {
+      x: world.cam.x + (init ? rand(-hw * 0.9, hw * 0.9) : rand(-hw * 1.35, hw * 1.35)),
+      y: clamp(world.cam.y + rand(-hh * 0.8, hh * 0.8), 200, 3e4),
+      r: rand(26, 46),
+      vx: rand(10, 22) * (Math.random() < 0.5 ? -1 : 1),
+      vy: rand(-6, 6),
+      ph: rand(TAU),
+      hue: rand(150, 180)
+    };
+  }
+  function pruneCrabs() {
+    const { crabs, terrain } = world;
+    for (let i = crabs.length - 1; i >= 0; i--) {
+      if (!terrain.includes(crabs[i].host)) crabs.splice(i, 1);
+    }
+  }
+  function updateBenthos(dt) {
+    const { crabs, turtles, terrain } = world;
+    pruneCrabs();
+    const want = crabTarget();
+    if (crabs.length < want) {
+      for (const o of terrain) {
+        if (crabs.length >= want) break;
+        if (o.kind !== "rock") continue;
+        if (crabs.some((c) => c.host === o)) continue;
+        crabs.push(makeCrab(o));
+      }
+    }
+    for (const c of crabs) {
+      c.ph += dt;
+      c.a += c.dir * c.speed * dt;
+      if (c.a < -Math.PI * 0.88) {
+        c.a = -Math.PI * 0.88;
+        c.dir = 1;
+      }
+      if (c.a > -Math.PI * 0.12) {
+        c.a = -Math.PI * 0.12;
+        c.dir = -1;
+      }
+    }
+    for (let i = turtles.length - 1; i >= 0; i--) {
+      const t = turtles[i];
+      t.ph += dt;
+      t.x += (t.vx + Math.sin(world.time * 0.25 + t.ph) * 5) * dt;
+      t.y += (t.vy + Math.cos(world.time * 0.21 + t.ph) * 4) * dt;
+      if (Math.abs(t.x - world.cam.x) > viewHW() * 1.9 || Math.abs(t.y - world.cam.y) > viewHH() * 1.7) {
+        turtles.splice(i, 1);
+      }
+    }
+    while (turtles.length < turtleTarget()) {
+      turtles.push(makeTurtle(turtles.length === 0));
+    }
+  }
+  function resetBenthos() {
+    world.crabs.length = 0;
+    world.turtles.length = 0;
+    for (let i = 0; i < turtleTarget(); i++) world.turtles.push(makeTurtle(true));
+  }
+  function crabPos(c) {
+    const host = c.host;
+    const R = host.r * 0.78;
+    return {
+      x: host.x + Math.cos(c.a) * R,
+      y: host.y + Math.sin(c.a) * R * 0.72 + host.r * 0.1
+    };
+  }
+
   // src/world/spawn.js
   function fishTarget() {
     return clamp(Math.round(viewArea() / 18e3), 10, 30);
@@ -881,7 +1227,9 @@
     for (let i = 0; i < nFood; i++) foods.push(makeFood(true));
     world.zoneIdx = -1;
     world.maxDepth = 0;
+    resetTerrain();
     resetAmbient();
+    resetBenthos();
   }
   onResize(buildSnow);
 
@@ -994,6 +1342,11 @@
     blip(150, 0.4, "sawtooth", 0.18, -105);
     noiseHit(0.3, 0.22, 420, 90);
   }
+  function sfxSting() {
+    if (!AC) return;
+    blip(1180, 0.12, "square", 0.05, -420);
+    noiseHit(0.14, 0.09, 2600, 900);
+  }
   function sfxChime() {
     if (!AC) return;
     blip(523, 0.5, "sine", 0.06, 0);
@@ -1064,11 +1417,20 @@
       player.vy *= f;
     }
     player.vx += Math.sin(world.time * 0.23 + 1.7) * 5 * dt;
+    const spdBefore = Math.hypot(player.vx, player.vy);
     player.x += player.vx * dt;
     player.y += player.vy * dt;
     if (player.y < 112) {
       player.y = 112;
       if (player.vy < 45) player.vy = 45;
+    }
+    const blocked = slideAgainstTerrain(player, player.r * 0.72);
+    player.pinned = blocked && spdBefore < 40 ? (player.pinned || 0) + dt : 0;
+    if (player.pinned > 0.7) {
+      const a = Math.atan2(player.y - world.cam.y, player.x - world.cam.x) + Math.PI / 2;
+      player.vx += Math.cos(a) * 90;
+      player.vy += Math.sin(a) * 90;
+      player.pinned = 0;
     }
     const spd = Math.hypot(player.vx, player.vy);
     if (spd > 22) {
@@ -1169,6 +1531,7 @@
       f.x += f.vx * dt;
       f.y += f.vy * dt;
       if (f.y < 128) f.vy += 200 * dt;
+      slideAgainstTerrain(f, f.r * 0.8);
       const sp = Math.hypot(f.vx, f.vy);
       if (sp > 18) {
         f.pitch = clamp(Math.atan2(f.vy, Math.abs(f.vx) + 30), -1.02, 1.02);
@@ -1321,12 +1684,28 @@
       const j = jellies[i];
       const dx = j.x - player.x, dy = j.y - player.y;
       const reach = pr + j.r * 0.55;
-      if (dx * dx + dy * dy < reach * reach && pr > j.r * 0.72) {
+      if (dx * dx + dy * dy >= reach * reach) continue;
+      if (pr > j.r * 0.72) {
         eatJelly(j);
         jellies.splice(i, 1);
         addJelly(false);
+      } else if (player.invuln <= 0) {
+        sting(j);
       }
     }
+  }
+  function sting(j) {
+    const { player } = world;
+    player.invuln = 1.2;
+    player.r = Math.max(8.5, player.r * 0.94);
+    const a = Math.atan2(player.y - j.y, player.x - j.x);
+    player.vx += Math.cos(a) * 190;
+    player.vy += Math.sin(a) * 190;
+    world.shake = Math.max(world.shake, 6);
+    world.flash = Math.max(world.flash, 0.45);
+    burst(player.x, player.y, 9, 300, true);
+    addText(player.x, player.y - player.r * 1.3, "被蜇了", "#d9c6ff");
+    sfxSting();
   }
   function hurt(f) {
     const { player } = world;
@@ -1892,6 +2271,239 @@
     }
   }
 
+  // src/render/terrain.js
+  function blobPath(parts, shrink, ox, oy, cx, cy, grow2 = 0) {
+    for (const c of parts) {
+      let { x, y, r } = c;
+      if (shrink !== 1) {
+        x = cx + (x - cx) * shrink;
+        y = cy + (y - cy) * shrink;
+        r = r * shrink;
+      }
+      r += grow2;
+      ctx.moveTo(x + r + ox, y + oy);
+      ctx.arc(x + ox, y + oy, r, 0, TAU);
+    }
+  }
+  function solidBlob(o, hue, sat, lit, highlight) {
+    ctx.beginPath();
+    blobPath(o.parts, 1, 0, 0, o.x, o.y, 3);
+    ctx.fillStyle = hsl(hue, sat * 0.8, lit * 0.62, 0.95);
+    ctx.fill();
+    ctx.beginPath();
+    blobPath(o.parts, 1, 0, 0, o.x, o.y);
+    ctx.fillStyle = hsl(hue, sat, lit, 0.98);
+    ctx.fill();
+    if (highlight) {
+      ctx.beginPath();
+      blobPath(o.parts, 0.68, -o.r * 0.03, -o.r * 0.08, o.x, o.y);
+      ctx.fillStyle = hsl(hue, sat * 0.9, lit + 9, 0.42);
+      ctx.fill();
+    }
+  }
+  function drawCoral(o) {
+    const t = world.time;
+    for (const c of o.coral) {
+      const x = o.x + c.ox;
+      const y = o.y + c.oy;
+      const sway = Math.sin(t * 0.9 + c.ph) * c.size * 0.12;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(sway * 0.12);
+      if (c.kind === "fan") {
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.quadraticCurveTo(-c.size * 0.9, -c.size * 0.7, -c.size * 0.35, -c.size * 1.15);
+        ctx.quadraticCurveTo(0, -c.size * 1.3, c.size * 0.35, -c.size * 1.15);
+        ctx.quadraticCurveTo(c.size * 0.9, -c.size * 0.7, 0, 0);
+        ctx.closePath();
+        ctx.fillStyle = hsl(c.hue, 62, 58, 0.72);
+        ctx.fill();
+        ctx.strokeStyle = hsl(c.hue, 70, 76, 0.5);
+        ctx.lineWidth = Math.max(0.8, c.size * 0.05);
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        for (let i = 0; i < 3; i++) {
+          const ox = (i - 1) * c.size * 0.42;
+          const h = c.size * (0.9 + 0.35 * Math.sin(i * 2.1 + c.ph));
+          const w = c.size * 0.26;
+          ctx.moveTo(ox - w, 0);
+          ctx.lineTo(ox - w * 0.8, -h);
+          ctx.lineTo(ox + w * 0.8, -h);
+          ctx.lineTo(ox + w, 0);
+          ctx.closePath();
+        }
+        ctx.fillStyle = hsl(c.hue, 60, 62, 0.7);
+        ctx.fill();
+        ctx.fillStyle = hsl(c.hue, 78, 82, 0.55);
+        for (let i = 0; i < 3; i++) {
+          const ox = (i - 1) * c.size * 0.42;
+          const h = c.size * (0.9 + 0.35 * Math.sin(i * 2.1 + c.ph));
+          ctx.beginPath();
+          ctx.ellipse(ox, -h, c.size * 0.22, c.size * 0.1, 0, 0, TAU);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  }
+  function drawRock(o) {
+    solidBlob(o, o.hue, 26, o.lit, true);
+    drawCoral(o);
+  }
+  function drawCave(o) {
+    solidBlob(o, o.hue, 28, o.lit, true);
+    const halfH = o.outerR * 0.52;
+    ctx.beginPath();
+    ctx.ellipse(o.x, o.y, o.gap * 0.82, halfH * 1.05, 0, 0, TAU);
+    ctx.fillStyle = "rgba(3,14,20,.4)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(o.x, o.y - halfH);
+    ctx.quadraticCurveTo(o.x - o.gap * 0.54, o.y - halfH * 0.15, o.x - o.gap * 0.34, o.y + halfH);
+    ctx.lineTo(o.x + o.gap * 0.34, o.y + halfH);
+    ctx.quadraticCurveTo(o.x + o.gap * 0.54, o.y - halfH * 0.15, o.x, o.y - halfH);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(2,8,13,.92)";
+    ctx.fill();
+    drawCoral(o);
+  }
+  function drawWreck(o) {
+    const { len, tilt, hullR } = o;
+    ctx.save();
+    ctx.translate(o.x, o.y);
+    ctx.rotate(tilt);
+    ctx.beginPath();
+    ctx.moveTo(-len * 0.5, -hullR * 0.2);
+    ctx.quadraticCurveTo(-len * 0.28, hullR * 1.15, 0, hullR * 1.25);
+    ctx.quadraticCurveTo(len * 0.3, hullR * 1.15, len * 0.5, -hullR * 0.15);
+    ctx.quadraticCurveTo(len * 0.2, hullR * 0.15, 0, hullR * 0.1);
+    ctx.quadraticCurveTo(-len * 0.24, hullR * 0.2, -len * 0.5, -hullR * 0.2);
+    ctx.closePath();
+    ctx.fillStyle = hsl(o.hue, 22, o.lit, 0.96);
+    ctx.fill();
+    ctx.beginPath();
+    for (let i = 0; i < 5; i++) {
+      const x = -len * 0.36 + i * (len * 0.18);
+      ctx.moveTo(x, hullR * 0.05);
+      ctx.quadraticCurveTo(x + len * 0.02, -hullR * 0.95, x + len * 0.05, -hullR * 1.15);
+    }
+    ctx.strokeStyle = hsl(o.hue, 26, o.lit * 0.8, 0.9);
+    ctx.lineWidth = Math.max(1.5, hullR * 0.13);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-len * 0.02, -hullR * 0.4);
+    ctx.lineTo(len * 0.06, -hullR * 2.1);
+    ctx.strokeStyle = hsl(o.hue, 24, o.lit * 0.75, 0.85);
+    ctx.lineWidth = Math.max(1.5, hullR * 0.1);
+    ctx.stroke();
+    ctx.restore();
+    drawCoral(o);
+  }
+  function drawTerrain() {
+    const deep = clamp((depthM() - 60) / 220, 0, 1);
+    ctx.save();
+    if (deep > 0.01) ctx.globalAlpha = 1 - deep * 0.12;
+    for (const o of world.terrain) {
+      if (o.kind === "rock") drawRock(o);
+      else if (o.kind === "cave") drawCave(o);
+      else drawWreck(o);
+    }
+    ctx.restore();
+  }
+
+  // src/render/benthos.js
+  function drawCrabs() {
+    const t = world.time;
+    for (const c of world.crabs) {
+      const { x, y } = crabPos(c);
+      const s = c.size;
+      const step = Math.sin(t * 7 + c.ph);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(c.dir, 1);
+      ctx.beginPath();
+      for (let i = 0; i < 4; i++) {
+        const off = (i - 1.5) * s * 0.34;
+        const lift = (i % 2 === 0 ? step : -step) * s * 0.28;
+        ctx.moveTo(off, s * 0.1);
+        ctx.lineTo(off + s * 0.5, s * 0.42 + lift);
+        ctx.lineTo(off + s * 0.78, s * 0.5 + lift * 1.4);
+      }
+      ctx.strokeStyle = "rgba(255,150,120,.72)";
+      ctx.lineWidth = Math.max(0.9, s * 0.11);
+      ctx.lineCap = "round";
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(s * 0.72, -s * 0.18, s * 0.3, 0, TAU);
+      ctx.arc(-s * 0.5, -s * 0.14, s * 0.24, 0, TAU);
+      ctx.fillStyle = "rgba(255,132,104,.85)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(0, 0, s * 0.92, s * 0.62, 0, 0, TAU);
+      ctx.fillStyle = hsl(8, 68, 54, 0.95);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(-s * 0.12, -s * 0.18, s * 0.5, s * 0.22, -0.2, 0, TAU);
+      ctx.fillStyle = "rgba(255,210,190,.4)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(s * 0.34, -s * 0.42, s * 0.1, 0, TAU);
+      ctx.arc(s * 0.56, -s * 0.4, s * 0.1, 0, TAU);
+      ctx.fillStyle = "rgba(20,10,10,.9)";
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+  function drawTurtles() {
+    const t = world.time;
+    for (const m of world.turtles) {
+      const R = m.r;
+      const flap = Math.sin(t * 1.4 + m.ph);
+      ctx.save();
+      ctx.translate(m.x, m.y);
+      ctx.scale(m.vx < 0 ? -1 : 1, 1);
+      ctx.fillStyle = hsl(m.hue, 34, 46, 0.9);
+      ctx.beginPath();
+      ctx.ellipse(R * 0.18, -R * 0.62 - flap * R * 0.1, R * 0.52, R * 0.2, -0.5 + flap * 0.18, 0, TAU);
+      ctx.ellipse(R * 0.18, R * 0.62 + flap * R * 0.1, R * 0.52, R * 0.2, 0.5 - flap * 0.18, 0, TAU);
+      ctx.ellipse(-R * 0.5, -R * 0.42, R * 0.3, R * 0.14, -0.35, 0, TAU);
+      ctx.ellipse(-R * 0.5, R * 0.42, R * 0.3, R * 0.14, 0.35, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(R * 0.86, 0, R * 0.28, R * 0.2, 0, 0, TAU);
+      ctx.fillStyle = hsl(m.hue, 30, 52, 0.95);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(R * 0.98, -R * 0.06, R * 0.045, 0, TAU);
+      ctx.fillStyle = "rgba(12,26,30,.9)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(0, 0, R * 0.92, R * 0.68, 0, 0, TAU);
+      ctx.fillStyle = hsl(m.hue, 40, 34, 0.95);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(0, 0, R * 0.7, R * 0.5, 0, 0, TAU);
+      ctx.fillStyle = hsl(m.hue, 44, 42, 0.85);
+      ctx.fill();
+      ctx.beginPath();
+      for (let i = 0; i < 5; i++) {
+        const a = i / 5 * TAU;
+        ctx.moveTo(0, 0);
+        ctx.lineTo(Math.cos(a) * R * 0.7, Math.sin(a) * R * 0.5);
+      }
+      ctx.strokeStyle = hsl(m.hue, 46, 28, 0.5);
+      ctx.lineWidth = Math.max(1, R * 0.035);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(-R * 0.18, -R * 0.22, R * 0.4, R * 0.18, -0.3, 0, TAU);
+      ctx.fillStyle = "rgba(200,255,235,.14)";
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
   // src/render/creatures.js
   var gradCache = /* @__PURE__ */ new Map();
   function cached(key, make) {
@@ -2368,6 +2980,9 @@
     ctx.scale(cam.z, cam.z);
     ctx.translate(-cam.x, -cam.y);
     drawVents();
+    drawTerrain();
+    drawCrabs();
+    drawTurtles();
     drawMantas();
     drawShoals();
     drawFood();
@@ -2408,7 +3023,9 @@
     updateFish(dt);
     updateJellies(dt);
     updateFoods(dt);
+    updateTerrain();
     updateAmbient(dt);
+    updateBenthos(dt);
     updateFx(dt);
     updateCamera(dt);
     if (world.mode === "over") {

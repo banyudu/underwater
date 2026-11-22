@@ -6,6 +6,7 @@ import { lerp } from '../core/math.js';
 import { world, depthM } from '../world/world.js';
 import { addFish, fishTarget } from '../world/spawn.js';
 import { viewHW, viewHH } from './view.js';
+import { slideAgainstTerrain } from '../world/terrain.js';
 
 export function updateFish(dt) {
   const { fishes, player, cam } = world;
@@ -100,6 +101,9 @@ export function updateFish(dt) {
     f.x += f.vx * dt;
     f.y += f.vy * dt;
     if (f.y < 128) f.vy += 200 * dt;
+
+    // 地形阻挡：体型越大越钻不进窄缝，所以小玩家能躲进洞穴
+    slideAgainstTerrain(f, f.r * 0.8);
 
     const sp = Math.hypot(f.vx, f.vy);
     if (sp > 18) {
