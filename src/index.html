@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#04141c">
+<title>深蓝 · ABYSS</title>
+<style>
+  :root{
+    --mint:#8ff6dc;
+    --icy:#dffff7;
+    --dim:rgba(190,230,235,.55);
+    --panel:rgba(6,24,32,.42);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; overflow:hidden; background:#03101a; color:#eafffb;
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+    -webkit-tap-highlight-color:transparent;
+    user-select:none;
+  }
+  canvas{display:block; position:fixed; inset:0; width:100%; height:100%; touch-action:none}
+  .vignette{
+    position:fixed; inset:0; pointer-events:none; z-index:2;
+    background:
+      radial-gradient(ellipse at 50% 46%, rgba(0,0,0,0) 38%, rgba(0,10,18,.34) 78%, rgba(0,8,14,.66) 100%),
+      linear-gradient(180deg, rgba(0,18,28,.17), rgba(0,0,0,0) 22%, rgba(0,0,0,0) 78%, rgba(0,8,14,.4));
+  }
+
+  /* ---------- HUD ---------- */
+  #hud{
+    position:fixed; inset:0; z-index:5; pointer-events:none;
+    padding:clamp(16px,3vw,34px);
+    display:flex; flex-direction:column; justify-content:space-between;
+    opacity:0; transform:translateY(-6px); transition:opacity .7s ease, transform .7s ease;
+  }
+  body.playing #hud{opacity:1; transform:none}
+  .hud-top{display:flex; justify-content:space-between; align-items:flex-start; gap:16px}
+  .depth{display:flex; align-items:baseline; gap:5px; font-weight:200; letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums; text-shadow:0 2px 24px rgba(0,20,30,.5)}
+  .depth b{font-size:clamp(38px,5.2vw,64px); font-weight:200; line-height:.9; color:#f2fffc}
+  .depth span{font-size:clamp(12px,1.4vw,16px); color:var(--dim); letter-spacing:.1em}
+  .stats{display:flex; align-items:center; gap:12px; margin-top:8px; font-size:11px;
+    letter-spacing:.18em; color:var(--dim); text-transform:uppercase}
+  .stats b{color:#d9fbf5; font-weight:500; font-variant-numeric:tabular-nums; letter-spacing:.05em}
+  .stats .sep{width:1px; height:9px; background:rgba(180,230,230,.25)}
+  .hud-right{display:flex; align-items:center; gap:10px}
+  .zone{
+    display:flex; align-items:center; gap:9px; padding:9px 15px; border-radius:999px;
+    background:var(--panel); border:1px solid rgba(160,240,235,.14);
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+    font-size:11px; letter-spacing:.26em; color:#d7f7f2; white-space:nowrap;
+  }
+  .zone i{width:6px; height:6px; border-radius:50%; background:var(--zc,#8ff6dc);
+    box-shadow:0 0 12px var(--zc,#8ff6dc), 0 0 3px var(--zc,#8ff6dc); animation:zonePulse 3s ease-in-out infinite}
+  @keyframes zonePulse{0%,100%{opacity:.65}50%{opacity:1}}
+  .sound{
+    position:relative;
+    width:38px; height:38px; border-radius:50%; display:grid; place-items:center; cursor:pointer;
+    background:var(--panel); border:1px solid rgba(160,240,235,.14); color:#cfeeea;
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+    font-size:15px; line-height:1; transition:background .25s, transform .2s; pointer-events:auto;
+  }
+  .sound:hover{background:rgba(20,60,70,.6); transform:scale(1.05)}
+  .sound.off{color:rgba(200,230,230,.35)}
+  .sound.off::after{content:""; position:absolute; width:22px; height:1px; background:currentColor; transform:rotate(-40deg)}
+
+  .hud-bottom{display:flex; flex-direction:column; align-items:center; gap:14px}
+  .sizebar{
+    display:flex; align-items:center; gap:10px; font-size:10px; letter-spacing:.22em; color:var(--dim);
+    text-transform:uppercase;
+  }
+  .sizebar .track{width:clamp(140px,26vw,260px); height:3px; border-radius:4px; overflow:hidden;
+    background:rgba(190,240,235,.13); box-shadow:inset 0 0 0 1px rgba(190,240,235,.06)}
+  .sizebar .track i{display:block; height:100%; width:100%; transform-origin:0 50%; transform:scaleX(.08);
+    background:linear-gradient(90deg,#4fd8c8,#a9fff0 60%,#fff6c8);
+    box-shadow:0 0 14px rgba(110,255,225,.5); transition:transform .35s cubic-bezier(.2,.8,.2,1)}
+  .sizebar b{color:#d9fbf5; font-weight:500; font-size:11px; letter-spacing:.06em; width:22px; font-variant-numeric:tabular-nums}
+  .hint{font-size:11px; letter-spacing:.22em; color:rgba(180,225,225,.42); transition:opacity 1.4s ease; text-align:center}
+  .hint.gone{opacity:0}
+
+  /* ---------- overlays ---------- */
+  .screen{
+    position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:28px;
+    transition:opacity .55s ease, visibility .55s ease;
+  }
+  .screen.hidden{opacity:0; visibility:hidden; pointer-events:none; transition:none}
+  #menu{
+    background:
+      radial-gradient(ellipse at 50% 44%, rgba(4,26,34,.06) 0%, rgba(2,14,22,.55) 58%, rgba(1,8,14,.88) 100%);
+    backdrop-filter:blur(1.5px); -webkit-backdrop-filter:blur(1.5px);
+  }
+  .panel{text-align:center; max-width:760px; width:100%; animation:panelIn 1.4s cubic-bezier(.2,.8,.2,1) both}
+  @keyframes panelIn{from{opacity:0; transform:translateY(18px)}to{opacity:1; transform:none}}
+  .kicker{font-size:10px; letter-spacing:.6em; color:#7fe9dd; opacity:.72; margin-bottom:20px; padding-left:.6em}
+  h1{
+    margin:0; font-family:"Songti SC","Noto Serif SC","STSong",Georgia,serif;
+    font-size:clamp(66px,15vw,168px); font-weight:500; line-height:1; letter-spacing:.16em;
+    padding-left:.16em; color:#e8fff9;
+    text-shadow:0 0 90px rgba(80,255,225,.28), 0 0 26px rgba(120,255,235,.18);
+    animation:floaty 9s ease-in-out infinite;
+  }
+  @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
+  .en{font-size:clamp(10px,1.6vw,13px); letter-spacing:.85em; padding-left:.85em; color:rgba(150,240,235,.55); margin:18px 0 0}
+  .rule{width:44px; height:1px; margin:clamp(20px,4vh,36px) auto; background:linear-gradient(90deg,transparent,rgba(150,255,240,.5),transparent)}
+  .desc{max-width:430px; margin:0 auto; font-size:13.5px; line-height:2; color:rgba(205,238,238,.62); letter-spacing:.06em}
+  .keys{display:flex; justify-content:center; gap:clamp(18px,4vw,38px); margin-top:clamp(24px,4.5vh,40px); flex-wrap:wrap}
+  .key{min-width:88px}
+  .key b{display:block; font-size:10px; font-weight:500; letter-spacing:.28em; color:#8ff6dc; margin-bottom:7px; text-transform:uppercase}
+  .key span{font-size:11.5px; color:rgba(200,235,235,.55); letter-spacing:.06em}
+  .primary{
+    appearance:none; border:0; cursor:pointer; margin-top:clamp(28px,5vh,44px);
+    padding:16px 42px; border-radius:999px; font-family:inherit;
+    font-size:13px; letter-spacing:.28em; padding-left:calc(42px + .28em); color:#03191a; font-weight:600;
+    background:linear-gradient(135deg,#b6fff0,#54dccb 55%,#8cefff);
+    box-shadow:0 14px 46px rgba(70,235,210,.24), inset 0 1px 0 rgba(255,255,255,.65);
+    transition:transform .28s cubic-bezier(.2,.8,.2,1), box-shadow .28s;
+  }
+  .primary:hover{transform:translateY(-2px) scale(1.02); box-shadow:0 20px 60px rgba(70,235,210,.38)}
+  .primary:active{transform:translateY(0) scale(.99)}
+  .primary span{opacity:.45; margin-left:10px; letter-spacing:0}
+  .ghost{
+    appearance:none; background:transparent; border:1px solid rgba(160,235,230,.2); color:rgba(210,245,240,.65);
+    border-radius:999px; padding:14px 30px; font-family:inherit; font-size:11px; letter-spacing:.24em;
+    cursor:pointer; margin-top:14px; transition:border-color .3s, color .3s;
+  }
+  .ghost:hover{border-color:rgba(160,235,230,.45); color:#dffff7}
+  .micro{margin-top:clamp(26px,5vh,46px); font-size:9px; letter-spacing:.42em; color:rgba(140,200,200,.28)}
+
+  #over{background:radial-gradient(ellipse at 50% 45%, rgba(10,8,16,.55), rgba(2,8,14,.92) 75%); backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px)}
+  #over h2{margin:0; font-family:"Songti SC","Noto Serif SC","STSong",Georgia,serif; font-weight:500;
+    font-size:clamp(34px,6.4vw,64px); letter-spacing:.14em; padding-left:.14em; color:#ffdde1;
+    text-shadow:0 0 70px rgba(255,120,140,.22)}
+  #over .sub{margin-top:14px; font-size:12px; letter-spacing:.18em; color:rgba(220,210,215,.5)}
+  .statsGrid{display:flex; justify-content:center; gap:clamp(30px,7vw,74px); margin:clamp(26px,5vh,44px) 0 6px}
+  .stat b{display:block; font-size:clamp(28px,4.6vw,46px); font-weight:200; color:#f2fffc;
+    font-variant-numeric:tabular-nums; line-height:1.2}
+  .stat span{font-size:9px; letter-spacing:.34em; color:rgba(160,210,215,.45); padding-left:.34em}
+  #pause{background:rgba(2,10,16,.62); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px)}
+  #pause h2{margin:0 0 4px; font-family:"Songti SC","Noto Serif SC",serif; font-size:clamp(26px,5vw,44px);
+    font-weight:500; letter-spacing:.3em; padding-left:.3em; color:#e9fffb}
+  #pause .sub{font-size:10px; letter-spacing:.4em; color:rgba(160,210,215,.4); margin-top:10px}
+
+  #toast{
+    position:fixed; left:50%; top:19%; transform:translate(-50%,10px); z-index:15;
+    font-family:"Songti SC","Noto Serif SC",serif; font-size:clamp(22px,3.6vw,38px);
+    letter-spacing:.5em; padding-left:.5em; color:#eafffb; opacity:0; pointer-events:none;
+    text-shadow:0 0 50px rgba(110,255,235,.45); white-space:nowrap;
+  }
+  #toast.show{animation:toastAnim 2.8s cubic-bezier(.2,.8,.2,1) both}
+  @keyframes toastAnim{
+    0%{opacity:0; transform:translate(-50%,16px); letter-spacing:.9em}
+    16%{opacity:1; transform:translate(-50%,0); letter-spacing:.5em}
+    70%{opacity:1; letter-spacing:.44em}
+    100%{opacity:0; transform:translate(-50%,-12px); letter-spacing:.4em}
+  }
+  @media (max-width:620px){
+    .stats{font-size:9.5px; gap:8px}
+    .zone{padding:8px 12px; font-size:10px; letter-spacing:.18em}
+    .key{min-width:74px}
+    .keys{gap:12px}
+    .hint{font-size:9.5px; letter-spacing:.14em; padding:0 16px; line-height:1.8}
+    .sound{width:34px;height:34px}
+    .depth b{font-size:34px}
+  }
+  @media (pointer:coarse){
+    .kbd-only{display:none}
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="vignette"></div>
+
+<div id="hud">
+  <div class="hud-top">
+    <div>
+      <div class="depth"><b id="hudDepth">0</b><span>m</span></div>
+      <div class="stats">
+        <span>得分 <b id="hudScore">0</b></span>
+        <span class="sep"></span>
+        <span>最佳 <b id="hudBest">0</b></span>
+      </div>
+    </div>
+    <div class="hud-right">
+      <div class="zone" id="hudZone"><i></i><span>阳光带</span></div>
+      <button class="sound" id="mute" title="声音 (M)" aria-label="开关声音">∿</button>
+    </div>
+  </div>
+  <div class="hud-bottom">
+    <div class="hint" id="hint">移动鼠标引导 · 按住加速 · 吞食更小的生物</div>
+    <div class="sizebar">
+      <span>体型</span>
+      <div class="track"><i id="sizeFill"></i></div>
+      <b id="sizeNum">18</b>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<div class="screen" id="menu">
+  <div class="panel">
+    <div class="kicker">PROCEDURAL OCEAN</div>
+    <h1>深蓝</h1>
+    <p class="en">A B Y S S</p>
+    <div class="rule"></div>
+    <p class="desc">没有一张贴图。每一尾鱼、每一束光、<br>都从代码里生长出来。</p>
+    <div class="keys">
+      <div class="key"><b>移动</b><span>鼠标 / 手指</span></div>
+      <div class="key"><b>加速</b><span>按住 空格</span></div>
+      <div class="key"><b>生存</b><span>吃小 · 躲大</span></div>
+    </div>
+    <button class="primary" id="go">潜入深海 <span>↵</span></button>
+    <div class="micro">NO TEXTURES · NO SPRITES · 100% ALGORITHM</div>
+  </div>
+</div>
+
+<div class="screen hidden" id="over">
+  <div class="panel">
+    <div class="kicker" style="color:#ff9aa8; opacity:.6">CONSUMED BY THE DEEP</div>
+    <h2>你被吞食了</h2>
+    <p class="sub">深海不会记得任何一条鱼。</p>
+    <div class="statsGrid">
+      <div class="stat"><b id="overDepth">0</b><span>最深 米</span></div>
+      <div class="stat"><b id="overScore">0</b><span>得分</span></div>
+      <div class="stat"><b id="overBest">0</b><span>最佳</span></div>
+    </div>
+    <div>
+      <button class="primary" id="restart">再潜一次</button>
+      <button class="ghost" id="toMenu">回到海面</button>
+    </div>
+  </div>
+</div>
+
+<div class="screen hidden" id="pause">
+  <div class="panel">
+    <h2>已 暂 停</h2>
+    <div class="sub">深海在等你</div>
+    <div style="margin-top:34px">
+      <button class="primary" id="resume">继续下潜</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/*__BUNDLE__*/
+</script>
+</body>
+</html>

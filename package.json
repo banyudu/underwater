@@ -1,0 +1,23 @@
+{
+  "name": "underwater",
+  "version": "1.0.0",
+  "private": true,
+  "description": "深蓝 · ABYSS —— 单文件、零素材的程序化海底生存游戏",
+  "type": "module",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "build:min": "node tools/build.mjs --minify",
+    "watch": "node tools/build.mjs --watch",
+    "verify": "node tools/verify-equivalence.mjs 2000",
+    "bench": "node tools/bench.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "npm run build && npm run verify && npm test"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "ISC"
+}

@@ -6,14 +6,60 @@
 
 ## 运行
 
-直接双击 `index.html`，或者：
+`index.html` 是构建产物，可以直接双击打开，也可以起个静态服务：
 
 ```bash
 python3 -m http.server 8000
 # 打开 http://localhost:8000
 ```
 
-没有构建步骤，没有依赖，没有外部请求。现代 Chrome / Safari / Firefox 均可。
+运行时没有任何外部请求、没有依赖、没有图片。现代 Chrome / Safari / Firefox 均可。
+
+## 开发
+
+源码在 `src/` 下，用原生 ES 模块组织；`index.html` 由构建脚本把模块打包内联回单文件（这样双击依然可用，模块不会在 `file://` 下被 CORS 拦住）。
+
+```bash
+npm install          # 只装 esbuild（开发期依赖）
+npm run watch        # 监听 src/ 改动，自动重建 index.html
+npm run build        # 手动构建一次
+npm run build:min    # 压缩版
+```
+
+因为产物是单文件、且不走任何 dev server 的注入，改完刷新浏览器即可。
+
+### 目录结构
+
+```
+src/
+  index.html          # HTML 外壳（CSS + DOM + 脚本占位符）
+  main.js             # 装配 + 主循环，唯一知道"一帧做什么"的地方
+  core/               # math / storage / dom / viewport / input
+  config/             # species（物种表）· zones（深度色板）
+  world/              # world（唯一可变状态）· spawn · audio · fx
+  systems/            # player / fish / jelly / plankton / camera / collision / hud / view
+  render/             # background / creatures / fx / overlay / scene
+  game/flow.js        # 状态机：菜单 → 游戏中 → 暂停 → 结算
+tools/
+  build.mjs           # esbuild 打包 + 内联进 HTML
+  verify-equivalence.mjs  # 逐帧比对新旧渲染指令，证明重构零回归
+  bench.mjs           # 纯逻辑性能基准
+  mock-dom.mjs        # Node 里的 canvas / DOM 桩
+test/                 # node:test 单测（纯函数 + 玩法规则）
+```
+
+### 校验
+
+```bash
+npm test        # 单测：数学、色板、生成、吞噬规则、摄像机
+npm run verify  # 等价性：新旧两版各跑 2000 帧，逐帧比对 canvas 指令与 DOM 写入
+npm run bench   # 逻辑耗时基准
+npm run check   # build + verify + test
+```
+
+`npm run verify` 是这次拆分的安全网：它把重构前的旧版和构建出的新版放进同一个沙箱，用假 canvas 录下每一次 2D context 调用（含坐标、颜色、混合模式），同时录下每一次 HUD 写入和 WebAudio 调用，逐帧比哈希。
+
+覆盖范围：启动阶段（初始世界生成、HUD 初值）+ 桌面/触屏两套输入的 2000 帧，包含开始游戏 → 指针操控 → 吞噬成长 → 暂停恢复 → 静音 → 死亡 → 结算 → 回到海面 → 再潜入。全部一致。
 
 ## 操作
 
@@ -49,18 +95,43 @@ python3 -m http.server 8000
 - 发光一律用径向渐变或多次低透明度叠加，避免昂贵的 `shadowBlur`。
 - 画布像素比封顶 1.5，兼顾 retinal 清晰度和填充率。
 - 所有随机使用固定种子的 noise 或逐帧伪随机，礁石形状不会闪烁。
+- 碰撞判定一律用平方距离，不开方。
+
+## 性能
+
+跑 `npm run bench` 得到的是**纯逻辑**耗时（30 鱼 / 137 浮游 / 4 水母）：
+
+```
+updateFish  (AI + 分离 + 回收)     0.0083 ms/frame
+updateFoods / updateJellies        0.0039 ms/frame
+updatePlayer + updateCamera        0.0003 ms/frame
+reef silhouettes (fBm x3 层)       0.0026 ms/frame
+合计                               0.0151 ms/frame   ← 60fps 预算的 0.09%
+```
+
+也就是说瓶颈不在 JS 计算，而在 canvas2d 的光栅化（填充率）。这也是这个项目**不需要 WASM** 的原因：逻辑本身只占预算的千分之一，改用 Rust/Go 只能拿回这一点点，而光栅化发生在浏览器内部，WASM 碰不到。
+
+真要提性能，方向是减少绘制开销，按性价比排序：
+
+1. 把鱼/水母按尾摆相位预烘成 sprite，绘制时只 `drawImage`（省掉每条鱼的路径构建、`clip()` 与渐变创建）。
+2. 浮游生物和粒子按颜色归并成一条 path，一次 `fill`。
+3. 渐变对象按深度取整复用；礁石层缓存到离屏画布。
+4. 帧超预算时降 DPR（1.5 → 1.0 → 0.75），做自适应分辨率。
 
 ## 体积
 
 | | |
 | --- | --- |
-| `index.html` 原始 | ~66 KB |
-| gzip 后 | **~19 KB** |
+| `index.html` 原始 | ~66.8 KB |
+| gzip 后 | **~18.6 KB** |
 | 外部资源 | 0 |
+| 运行时依赖 | 0 |
 
 `index.html` 是唯一运行文件，仓库里刻意不放任何图片。
 
 ## 文件
 
-- `index.html` — 游戏本体
+- `src/` — 游戏源码（ES 模块）
+- `index.html` — 构建产物，唯一运行文件
+- `tools/`、`test/` — 构建、校验、基准、单测
 - `README.md` — 本文件
