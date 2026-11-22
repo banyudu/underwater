@@ -4,14 +4,6 @@
 
 这不是一个"压体积"的 demo，而是沿用 24KB / 30KB 那一类小游戏的做法：**不加载资源，用算法把世界画出来**。
 
-![深蓝 · ABYSS](screenshots/title.png)
-
-## 预览
-
-![水面](screenshots/surface.png)
-
-![午夜带](screenshots/midnight.png)
-
 ## 运行
 
 直接双击 `index.html`，或者：
@@ -66,10 +58,9 @@ python3 -m http.server 8000
 | gzip 后 | **~19 KB** |
 | 外部资源 | 0 |
 
-`index.html` 是唯一运行文件。`screenshots/` 里的图片只用于展示，游戏不会加载它们。
+`index.html` 是唯一运行文件，仓库里刻意不放任何图片。
 
 ## 文件
 
 - `index.html` — 游戏本体
 - `README.md` — 本文件
-- `screenshots/` — 预览图
