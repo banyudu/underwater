@@ -144,6 +144,25 @@ export function shelfAt(n) {
       .map(c => ({ ...c, ox: clamp(c.ox, -spread / 2, spread / 2) + (a + b) / 2 })));
   }
 
+  /* --- 海藻：也长在岩台顶面上，浅水才有 --- */
+  const depthOfShelf = y / 20;
+  const kelpFade = clamp(1 - (depthOfShelf - 30) / 150, 0, 1);   // 30m 起变稀，180m 消失
+  shelf.kelp = [];
+  if (kelpFade > 0.05) {
+    for (const [a, b] of merged) {
+      for (let x = a + 40; x < b - 40; x += 46) {
+        const ks = s + x * 0.031;
+        if (hash(ks) > 0.82 * kelpFade) continue;
+        shelf.kelp.push({
+          ox: x,
+          h: (160 + hash(ks + 1) * 210) * (0.55 + kelpFade * 0.45),
+          w: 22 + hash(ks + 2) * 22,
+          ph: hash(ks + 3) * TAU,
+        });
+      }
+    }
+  }
+
   /* --- 石头：坐在岩台顶面上，绝不悬空 --- */
   const boulders = [];
   for (const [a, b] of merged) {

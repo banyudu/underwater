@@ -5,81 +5,8 @@ import { TAU, clamp, hsl, lerp } from '../core/math.js';
 import { ctx, W, H } from '../core/viewport.js';
 import { world, depthM } from '../world/world.js';
 
-/* ---------------- 海藻林 ---------------- */
-
-// 每层：视差、间距、高度范围、颜色、透明度
-const KELP_LAYERS = [
-  { par: 0.30, spacing: 118, hMin: 210, hMax: 400, hue: 154, sat: 44, li: 21, alpha: 0.42, width: 30 },
-  { par: 0.50, spacing: 156, hMin: 160, hMax: 310, hue: 147, sat: 40, li: 15, alpha: 0.6, width: 38 },
-  { par: 0.72, spacing: 210, hMin: 110, hMax: 210, hue: 142, sat: 34, li: 11, alpha: 0.72, width: 44 },
-];
-
-export function drawKelp() {
-  const d = depthM();
-  // 越深越没有海藻：40m 开始变稀，170m 以下彻底消失（深处交给热泉和生物光）
-  const fade = clamp(1 - (d - 40) / 130, 0, 1);
-  if (fade <= 0.03) return;
-
-  const { cam, time } = world;
-  ctx.save();
-
-  for (let li = 0; li < KELP_LAYERS.length; li++) {
-    const L = KELP_LAYERS[li];
-    const span = W + L.spacing * 2;
-    const count = Math.ceil(span / L.spacing);
-    const baseY = H + 26;
-    const off = cam.x * L.par;
-
-    ctx.fillStyle = hsl(L.hue, L.sat, L.li, L.alpha * fade);
-    ctx.beginPath();
-
-    for (let i = 0; i < count; i++) {
-      // 用取模把海藻铺成无限横移的一排
-      let x = i * L.spacing - off;
-      x = ((x % span) + span) % span - L.spacing;
-      if (x < -80 || x > W + 80) continue;
-
-      const seed = i * 7.31 + li * 13.7;
-      const h = lerp(L.hMin, L.hMax, Math.abs(Math.sin(seed * 1.7)));
-      const w = L.width * (0.8 + 0.4 * Math.abs(Math.cos(seed)));
-      const sway = Math.sin(time * 0.62 + seed) * (10 + h * 0.055);
-      const lean = Math.sin(seed * 2.3) * w * 0.9;
-
-      const topX = x + sway + lean;
-      const topY = baseY - h;
-
-      // 一条从根部收细、带波浪边缘、并向一侧倾斜的叶带
-      const wv = w * 0.16;
-      ctx.moveTo(x - w * 0.5, baseY + 10);
-      // 左缘：三段，带两个内凹，叶缘才有起伏
-      ctx.bezierCurveTo(
-        x - w * 0.46 + sway * 0.3, baseY - h * 0.26,
-        x - w * 0.30 + sway * 0.55 + wv, baseY - h * 0.42,
-        x - w * 0.34 + sway * 0.6, baseY - h * 0.56,
-      );
-      ctx.bezierCurveTo(
-        x - w * 0.22 + sway * 0.8, baseY - h * 0.72,
-        topX - w * 0.16, baseY - h * 0.88,
-        topX, topY,
-      );
-      // 右缘
-      ctx.bezierCurveTo(
-        topX + w * 0.16, baseY - h * 0.86,
-        x + w * 0.30 + sway * 0.7 - wv, baseY - h * 0.66,
-        x + w * 0.36 + sway * 0.5, baseY - h * 0.5,
-      );
-      ctx.bezierCurveTo(
-        x + w * 0.42 + sway * 0.3, baseY - h * 0.32,
-        x + w * 0.46, baseY - h * 0.14,
-        x + w * 0.5, baseY + 10,
-      );
-      ctx.closePath();
-    }
-    ctx.fill();
-  }
-
-  ctx.restore();
-}
+// 海藻原本画在屏幕空间（锚在视口底边），下潜时跟着屏幕走。
+// 现在海藻长在岩台顶面上，见 world/terrain.js 与 render/terrain.js。
 
 /* ---------------- 鱼群 ---------------- */
 

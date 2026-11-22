@@ -263,15 +263,6 @@
     const i = Math.floor(x), f = x - i;
     return lerp(hash(i), hash(i + 1), smoothstep(f));
   }
-  function fbm(x, oct = 4) {
-    let v = 0, a = 0.5, f = 1;
-    for (let i = 0; i < oct; i++) {
-      v += noise1(x * f + i * 31.7) * a;
-      a *= 0.5;
-      f *= 2.03;
-    }
-    return v;
-  }
 
   // src/core/input.js
   var pointer = {
@@ -824,6 +815,23 @@
       if (b - a < 160) continue;
       const spread = Math.min(b - a - 60, 900);
       shelf.coral.push(...coralAt(s + a * 0.01, spread, -cr + 4).map((c) => ({ ...c, ox: clamp(c.ox, -spread / 2, spread / 2) + (a + b) / 2 })));
+    }
+    const depthOfShelf = y / 20;
+    const kelpFade = clamp(1 - (depthOfShelf - 30) / 150, 0, 1);
+    shelf.kelp = [];
+    if (kelpFade > 0.05) {
+      for (const [a, b] of merged) {
+        for (let x = a + 40; x < b - 40; x += 46) {
+          const ks = s + x * 0.031;
+          if (hash(ks) > 0.82 * kelpFade) continue;
+          shelf.kelp.push({
+            ox: x,
+            h: (160 + hash(ks + 1) * 210) * (0.55 + kelpFade * 0.45),
+            w: 22 + hash(ks + 2) * 22,
+            ph: hash(ks + 3) * TAU
+          });
+        }
+      }
     }
     const boulders = [];
     for (const [a, b] of merged) {
@@ -2086,30 +2094,6 @@
       }
       ctx.restore();
     }
-    const layers = [
-      { par: 0.16, amp: 380, base: 1.02, li: 0.44, seed: 2.3, step: 46 },
-      { par: 0.32, amp: 250, base: 1.1, li: 0.3, seed: 7.1, step: 34 },
-      { par: 0.54, amp: 150, base: 1.19, li: 0.19, seed: 13.7, step: 26 }
-    ];
-    for (const L of layers) {
-      const off = cam.x * L.par;
-      const yb = H * L.base + cam.y * 0.018 * L.par;
-      ctx.beginPath();
-      ctx.moveTo(-90, H + 100);
-      for (let sx = -90; sx <= W + 90; sx += L.step) {
-        const nx = (sx + off) * 22e-4 + L.seed;
-        const n = clamp((fbm(nx, 4) - 0.22) / 0.52, 0, 1);
-        const h = Math.pow(n, 1.45) * L.amp + Math.sin(nx * 5.1 + L.seed) * L.amp * 0.045 + (noise1(nx * 14 + L.seed * 3) - 0.5) * L.amp * 0.07;
-        ctx.lineTo(sx, yb - h);
-      }
-      ctx.lineTo(W + 90, H + 100);
-      ctx.closePath();
-      ctx.fillStyle = hsl(p.a[0] + 6, p.a[1] * 0.55, Math.max(3, p.a[2] * L.li * 0.72), 0.9);
-      ctx.fill();
-      ctx.strokeStyle = hsl(p.a[0] + 12, Math.min(60, p.a[1] * 0.5), Math.min(74, p.a[2] * 1.25), 0.09);
-      ctx.lineWidth = 1.4;
-      ctx.stroke();
-    }
     const murk = ctx.createLinearGradient(0, H * 0.58, 0, H);
     murk.addColorStop(0, hsl(p.b[0], p.b[1], p.b[2], 0));
     murk.addColorStop(1, hsl(p.b[0], p.b[1], Math.max(4, p.b[2] * 0.72), 0.6));
@@ -2136,76 +2120,6 @@
   }
 
   // src/render/ambient.js
-  var KELP_LAYERS = [
-    { par: 0.3, spacing: 118, hMin: 210, hMax: 400, hue: 154, sat: 44, li: 21, alpha: 0.42, width: 30 },
-    { par: 0.5, spacing: 156, hMin: 160, hMax: 310, hue: 147, sat: 40, li: 15, alpha: 0.6, width: 38 },
-    { par: 0.72, spacing: 210, hMin: 110, hMax: 210, hue: 142, sat: 34, li: 11, alpha: 0.72, width: 44 }
-  ];
-  function drawKelp() {
-    const d = depthM();
-    const fade = clamp(1 - (d - 40) / 130, 0, 1);
-    if (fade <= 0.03) return;
-    const { cam, time } = world;
-    ctx.save();
-    for (let li = 0; li < KELP_LAYERS.length; li++) {
-      const L = KELP_LAYERS[li];
-      const span = W + L.spacing * 2;
-      const count = Math.ceil(span / L.spacing);
-      const baseY = H + 26;
-      const off = cam.x * L.par;
-      ctx.fillStyle = hsl(L.hue, L.sat, L.li, L.alpha * fade);
-      ctx.beginPath();
-      for (let i = 0; i < count; i++) {
-        let x = i * L.spacing - off;
-        x = (x % span + span) % span - L.spacing;
-        if (x < -80 || x > W + 80) continue;
-        const seed = i * 7.31 + li * 13.7;
-        const h = lerp(L.hMin, L.hMax, Math.abs(Math.sin(seed * 1.7)));
-        const w = L.width * (0.8 + 0.4 * Math.abs(Math.cos(seed)));
-        const sway = Math.sin(time * 0.62 + seed) * (10 + h * 0.055);
-        const lean = Math.sin(seed * 2.3) * w * 0.9;
-        const topX = x + sway + lean;
-        const topY2 = baseY - h;
-        const wv = w * 0.16;
-        ctx.moveTo(x - w * 0.5, baseY + 10);
-        ctx.bezierCurveTo(
-          x - w * 0.46 + sway * 0.3,
-          baseY - h * 0.26,
-          x - w * 0.3 + sway * 0.55 + wv,
-          baseY - h * 0.42,
-          x - w * 0.34 + sway * 0.6,
-          baseY - h * 0.56
-        );
-        ctx.bezierCurveTo(
-          x - w * 0.22 + sway * 0.8,
-          baseY - h * 0.72,
-          topX - w * 0.16,
-          baseY - h * 0.88,
-          topX,
-          topY2
-        );
-        ctx.bezierCurveTo(
-          topX + w * 0.16,
-          baseY - h * 0.86,
-          x + w * 0.3 + sway * 0.7 - wv,
-          baseY - h * 0.66,
-          x + w * 0.36 + sway * 0.5,
-          baseY - h * 0.5
-        );
-        ctx.bezierCurveTo(
-          x + w * 0.42 + sway * 0.3,
-          baseY - h * 0.32,
-          x + w * 0.46,
-          baseY - h * 0.14,
-          x + w * 0.5,
-          baseY + 10
-        );
-        ctx.closePath();
-      }
-      ctx.fill();
-    }
-    ctx.restore();
-  }
   function drawShoals() {
     const { shoals, time } = world;
     for (const s of shoals) {
@@ -2321,6 +2235,42 @@
   function botY(o, x) {
     return o.y + o.cr * (0.86 + 0.12 * Math.sin(x * 0.017 + o.seed * 1.7)) + Math.sin(x * 0.031 + o.seed * 0.7) * 6;
   }
+  function drawShelfKelp(o) {
+    if (!o.kelp || o.kelp.length === 0) return;
+    const t = world.time;
+    ctx.beginPath();
+    for (const k of o.kelp) {
+      const baseX = k.ox;
+      const baseY = topY(o, baseX) + 3;
+      const sway = Math.sin(t * 0.62 + k.ph) * (9 + k.h * 0.05);
+      const topX = baseX + sway;
+      const topYk = baseY - k.h;
+      const w = k.w;
+      const halfW = w * 0.46;
+      const tipW = w * 0.32;
+      ctx.moveTo(baseX - halfW, baseY + 4);
+      ctx.bezierCurveTo(
+        baseX - halfW * 1.06 + sway * 0.3,
+        baseY - k.h * 0.34,
+        topX - tipW + sway * 0.78,
+        baseY - k.h * 0.7,
+        topX - tipW,
+        topYk
+      );
+      ctx.quadraticCurveTo(topX, topYk - w * 0.62, topX + tipW, topYk);
+      ctx.bezierCurveTo(
+        topX + tipW + sway * 0.78,
+        baseY - k.h * 0.7,
+        baseX + halfW * 1.06 + sway * 0.3,
+        baseY - k.h * 0.34,
+        baseX + halfW,
+        baseY + 4
+      );
+      ctx.closePath();
+    }
+    ctx.fillStyle = hsl(154, 44, 20, 0.86);
+    ctx.fill();
+  }
   function drawCoral(o) {
     const t = world.time;
     for (const c of o.coral) {
@@ -2419,6 +2369,7 @@
         ctx.stroke();
       }
     }
+    drawShelfKelp(o);
     drawCoral(o);
   }
   function solidBlob(o, hue, sat, lit, highlight) {
@@ -3069,7 +3020,6 @@
     const { cam, player } = world;
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     drawWater(dt);
-    drawKelp();
     const sx = (Math.random() - 0.5) * world.shake;
     const sy = (Math.random() - 0.5) * world.shake;
     ctx.save();

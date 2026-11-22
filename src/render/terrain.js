@@ -22,6 +22,42 @@ function botY(o, x) {
     + Math.sin(x * 0.031 + o.seed * 0.7) * 6;
 }
 
+/** 岩台顶面的海藻：从台面往上长，随水流摆。所有叶带合成一条 path，只 fill 一次。 */
+function drawShelfKelp(o) {
+  if (!o.kelp || o.kelp.length === 0) return;
+  const t = world.time;
+
+  ctx.beginPath();
+  for (const k of o.kelp) {
+    const baseX = k.ox;
+    const baseY = topY(o, baseX) + 3;
+    const sway = Math.sin(t * 0.62 + k.ph) * (9 + k.h * 0.05);
+    const topX = baseX + sway;
+    const topYk = baseY - k.h;
+    const w = k.w;
+
+    // 等宽的叶带 + 圆头：之前从宽基部收到尖顶，看起来像三角尖刺
+    const halfW = w * 0.46;
+    const tipW = w * 0.32;
+
+    ctx.moveTo(baseX - halfW, baseY + 4);
+    ctx.bezierCurveTo(
+      baseX - halfW * 1.06 + sway * 0.3, baseY - k.h * 0.34,
+      topX - tipW + sway * 0.78, baseY - k.h * 0.7,
+      topX - tipW, topYk,
+    );
+    ctx.quadraticCurveTo(topX, topYk - w * 0.62, topX + tipW, topYk);
+    ctx.bezierCurveTo(
+      topX + tipW + sway * 0.78, baseY - k.h * 0.7,
+      baseX + halfW * 1.06 + sway * 0.3, baseY - k.h * 0.34,
+      baseX + halfW, baseY + 4,
+    );
+    ctx.closePath();
+  }
+  ctx.fillStyle = hsl(154, 44, 20, 0.86);
+  ctx.fill();
+}
+
 function drawCoral(o) {
   const t = world.time;
   for (const c of o.coral) {
@@ -134,6 +170,7 @@ function drawShelf(o) {
     }
   }
 
+  drawShelfKelp(o);
   drawCoral(o);
 }
 

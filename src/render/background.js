@@ -1,7 +1,7 @@
 // 背景层：水色渐变、天空、太阳、水面波纹、光柱、焦散、三层视差礁石、浑浊、海雪。
 // 这是填充率最重的一层，改动前先跑 tools/bench.mjs。
 
-import { TAU, clamp, lerp, rand, hsl, fbm, noise1 } from '../core/math.js';
+import { TAU, clamp, lerp, rand, hsl } from '../core/math.js';
 import { ctx, W, H } from '../core/viewport.js';
 import { palAt } from '../config/zones.js';
 import { world, depthM } from '../world/world.js';
@@ -137,35 +137,10 @@ export function drawWater(dt) {
     ctx.restore();
   }
 
-  // distant reefs (three parallax layers)
-  const layers = [
-    { par: 0.16, amp: 380, base: 1.02, li: 0.44, seed: 2.3, step: 46 },
-    { par: 0.32, amp: 250, base: 1.10, li: 0.30, seed: 7.1, step: 34 },
-    { par: 0.54, amp: 150, base: 1.19, li: 0.19, seed: 13.7, step: 26 },
-  ];
-  for (const L of layers) {
-    const off = cam.x * L.par;
-    const yb = H * L.base + cam.y * 0.018 * L.par;
-    ctx.beginPath();
-    ctx.moveTo(-90, H + 100);
-    for (let sx = -90; sx <= W + 90; sx += L.step) {
-      const nx = (sx + off) * 0.0022 + L.seed;
-      const n = clamp((fbm(nx, 4) - 0.22) / 0.52, 0, 1);
-      const h = Math.pow(n, 1.45) * L.amp
-        + Math.sin(nx * 5.1 + L.seed) * L.amp * 0.045
-        + (noise1(nx * 14 + L.seed * 3) - 0.5) * L.amp * 0.07;
-      ctx.lineTo(sx, yb - h);
-    }
-    ctx.lineTo(W + 90, H + 100);
-    ctx.closePath();
-    // 这两个数字压低了远景礁石的对比度：真正的海底现在是 src/world/terrain.js 里的岩台，
-    // 背景这层只该当"远处的雾山"，否则会和近处地形抢视觉。
-    ctx.fillStyle = hsl(p.a[0] + 6, p.a[1] * 0.55, Math.max(3, p.a[2] * L.li * 0.72), 0.9);
-    ctx.fill();
-    ctx.strokeStyle = hsl(p.a[0] + 12, Math.min(60, p.a[1] * 0.5), Math.min(74, p.a[2] * 1.25), 0.09);
-    ctx.lineWidth = 1.4;
-    ctx.stroke();
-  }
+  // 这里原本有三层"屏幕空间"的礁石剪影。问题是它们锚在视口底部
+  //（yb = H*base + cam.y*0.018*par），下潜近 800px 只挪几像素，
+  // 看起来就像一座钉在屏幕底、一直跟着玩家的山。
+  // 现在真正的海底是 src/world/terrain.js 里的岩台，所以这层删掉。
 
   // deep murk at the bottom
   const murk = ctx.createLinearGradient(0, H * 0.58, 0, H);
