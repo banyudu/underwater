@@ -23,7 +23,7 @@ export const FISH = {
 };
 
 export const PREDATOR = {
-  share: 0.12,             // 新生成鱼中捕食者占比（原为 0.20）
+  share: 0.14,             // 新生成鱼中捕食者占比（原为 0.20）
   midShare: 0.28,          // 与玩家体型相仿的比例
 
   huntRadius: 460,
@@ -49,4 +49,28 @@ export const PREDATOR = {
   spawnGrace: 1.6,         // 刚出生的捕食者先"没看见"玩家
 
   lungeRadius: 250,
+};
+
+// 深度梯度：表层是教学区，越深猎手越主动。
+// 之前各层用的是一套参数，实测 200m 反而比表层更安全，等于"越深越没挑战"。
+export const DEPTH_SCALING = {
+  startM: 40,            // 这个深度以浅：完全用表层参数
+  fullM: 220,            // 到这个深度：完全用深层参数
+
+  maxHuntersSurface: 2,   // 表层只放 2 只追，躲得开才有回报
+  maxHuntersDeep: 4,
+
+  huntRadiusSurface: 460,
+  huntRadiusDeep: 590,
+
+  huntSpeedMulSurface: 1.2,
+  huntSpeedMulDeep: 1.34,
+
+  lungeSpeedMulSurface: 1.3,   // 表层：实测峰值仍低于玩家常态，跑得掉
+  lungeSpeedMulDeep: 1.45,     // 深层：追得上，必须靠转向躲
+
+  disengageSurfaceMin: 2.5,
+  disengageSurfaceMax: 4.5,
+  disengageDeepMin: 1.2,
+  disengageDeepMax: 2.2,
 };

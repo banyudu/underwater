@@ -35,6 +35,11 @@ export const world = {
   texts: [],
   snow: [],
 
+  // 环境元素（不参与吃/被吃）
+  shoals: [],
+  mantas: [],
+  vents: [],
+
   // 触屏标记
   touchUI: false,
 };

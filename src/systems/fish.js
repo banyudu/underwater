@@ -1,8 +1,9 @@
 // 鱼群 AI：捕食 / 逃跑 / 巡游 + 突袭 + 互相分离 + 离屏回收。
 
 import { clamp, rand, noise1 } from '../core/math.js';
-import { FISH, PREDATOR } from '../config/tuning.js';
-import { world } from '../world/world.js';
+import { FISH, PREDATOR, DEPTH_SCALING } from '../config/tuning.js';
+import { lerp } from '../core/math.js';
+import { world, depthM } from '../world/world.js';
 import { addFish, fishTarget } from '../world/spawn.js';
 import { viewHW, viewHH } from './view.js';
 
@@ -11,6 +12,18 @@ export function updateFish(dt) {
   const px = player.x, py = player.y, pr = player.r;
   const hunting = world.mode === 'play';
   let hunters = 0;
+
+  // 按深度插值出"猎手积极性"，一次算好，循环里直接用
+  const agg = clamp(
+    (depthM() - DEPTH_SCALING.startM) / (DEPTH_SCALING.fullM - DEPTH_SCALING.startM),
+    0, 1,
+  );
+  const maxHunters = Math.round(lerp(DEPTH_SCALING.maxHuntersSurface, DEPTH_SCALING.maxHuntersDeep, agg));
+  const huntRadius = lerp(DEPTH_SCALING.huntRadiusSurface, DEPTH_SCALING.huntRadiusDeep, agg);
+  const huntMul = lerp(DEPTH_SCALING.huntSpeedMulSurface, DEPTH_SCALING.huntSpeedMulDeep, agg);
+  const lungeMul = lerp(DEPTH_SCALING.lungeSpeedMulSurface, DEPTH_SCALING.lungeSpeedMulDeep, agg);
+  const disengageMin = lerp(DEPTH_SCALING.disengageSurfaceMin, DEPTH_SCALING.disengageDeepMin, agg);
+  const disengageMax = lerp(DEPTH_SCALING.disengageSurfaceMax, DEPTH_SCALING.disengageDeepMax, agg);
 
   for (const f of fishes) {
     const dx = px - f.x, dy = py - f.y;
@@ -25,19 +38,19 @@ export function updateFish(dt) {
     if (f.calm > 0) f.calm -= dt;
     // 扑咬收尾：强制脱战，避免"咬完接着咬"
     if (wasLunging && f.lunge <= 0) {
-      f.giveup = rand(PREDATOR.disengageMin, PREDATOR.disengageMax);
+      f.giveup = rand(disengageMin, disengageMax);
       f.hunt = 0;
     }
 
-    if (hunting && isPred && f.calm <= 0 && hunters < PREDATOR.maxHunters
-        && dist < PREDATOR.huntRadius && f.giveup <= 0) {
+    if (hunting && isPred && f.calm <= 0 && hunters < maxHunters
+        && dist < huntRadius && f.giveup <= 0) {
       hunters++;
       const lead = 0.16;
       const tx = px + player.vx * lead - f.x;
       const ty = py + player.vy * lead - f.y;
       const m = Math.hypot(tx, ty) || 1;
       ax = tx / m; ay = ty / m;
-      spd *= PREDATOR.huntSpeedMul;
+      spd *= huntMul;
       f.danger = 1;
       f.hunt += dt;
       if (f.hunt > 6) { f.giveup = 5; f.hunt = 0; }
@@ -72,7 +85,7 @@ export function updateFish(dt) {
       spd *= PREDATOR.windupSpeedMul;
       if (f.windup <= 0) f.lunge = PREDATOR.lungeDur;
     } else if (f.lunge > 0) {
-      spd *= PREDATOR.lungeSpeedMul;
+      spd *= lungeMul;
     } else if (hunting && f.calm <= 0 && f.danger > 0.5 && dist < PREDATOR.lungeRadius && f.lungeCd <= 0) {
       f.windup = PREDATOR.windup;
       f.lungeCd = rand(PREDATOR.lungeCdMin, PREDATOR.lungeCdMax);

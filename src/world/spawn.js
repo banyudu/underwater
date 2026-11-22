@@ -5,6 +5,7 @@ import { onResize, W, H } from '../core/viewport.js';
 import { world, depthM } from './world.js';
 import { SPECS, FOOD_KEYS, DEEP_FOOD, PRED_KEYS, DEEP_PRED } from '../config/species.js';
 import { PREDATOR } from '../config/tuning.js';
+import { resetAmbient } from './ambient.js';
 import { viewHW, viewHH, viewArea } from '../systems/view.js';
 
 // 数量上限按可视面积缩放，桌面和手机都能保持合适密度。
@@ -166,6 +167,8 @@ export function resetWorld() {
 
   world.zoneIdx = -1;
   world.maxDepth = 0;
+
+  resetAmbient();
 }
 
 // 窗口尺寸变化时重铺海雪

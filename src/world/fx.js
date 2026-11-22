@@ -1,6 +1,7 @@
 // 短命特效：粒子、气泡、飘分、扩散环。全部走对象池式的数组 + splice 回收。
 
 import { TAU, rand } from '../core/math.js';
+import { viewHH } from '../systems/view.js';
 import { world } from './world.js';
 
 export function burst(x, y, n, hue, gentle) {
@@ -16,7 +17,10 @@ export function burst(x, y, n, hue, gentle) {
   }
 }
 
+const BUBBLE_MAX = 160;
+
 export function addBubble(x, y, size) {
+  if (world.bubbles.length >= BUBBLE_MAX) world.bubbles.shift();
   world.bubbles.push({ x, y, r: size || rand(1.2, 3.4), v: rand(26, 74), ph: rand(TAU), a: rand(0.4, 0.9) });
 }
 
@@ -44,7 +48,9 @@ export function updateFx(dt) {
     b.y -= b.v * dt;
     b.x += Math.sin(world.time * 2.4 + b.ph) * 18 * dt;
     b.ph += dt * 2;
-    if (b.y < -30) bubbles.splice(i, 1);
+    // 同时按"飘出视野上方"回收。原先只看 y < -30（水面），
+    // 导致深水区的气泡永远达不到这个条件，会无限累积。
+    if (b.y < -30 || b.y < world.cam.y - viewHH() * 1.25) bubbles.splice(i, 1);
   }
   for (let i = rings.length - 1; i >= 0; i--) {
     const r = rings[i];

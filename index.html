@@ -422,6 +422,10 @@
     rings: [],
     texts: [],
     snow: [],
+    // 环境元素（不参与吃/被吃）
+    shoals: [],
+    mantas: [],
+    vents: [],
     // 触屏标记
     touchUI: false
   };
@@ -474,7 +478,7 @@
     // 低于这个速度不翻朝向（悬停时不抖）
   };
   var PREDATOR = {
-    share: 0.12,
+    share: 0.14,
     // 新生成鱼中捕食者占比（原为 0.20）
     midShare: 0.28,
     // 与玩家体型相仿的比例
@@ -503,11 +507,209 @@
     // 刚出生的捕食者先"没看见"玩家
     lungeRadius: 250
   };
+  var DEPTH_SCALING = {
+    startM: 40,
+    // 这个深度以浅：完全用表层参数
+    fullM: 220,
+    // 到这个深度：完全用深层参数
+    maxHuntersSurface: 2,
+    // 表层只放 2 只追，躲得开才有回报
+    maxHuntersDeep: 4,
+    huntRadiusSurface: 460,
+    huntRadiusDeep: 590,
+    huntSpeedMulSurface: 1.2,
+    huntSpeedMulDeep: 1.34,
+    lungeSpeedMulSurface: 1.3,
+    // 表层：实测峰值仍低于玩家常态，跑得掉
+    lungeSpeedMulDeep: 1.45,
+    // 深层：追得上，必须靠转向躲
+    disengageSurfaceMin: 2.5,
+    disengageSurfaceMax: 4.5,
+    disengageDeepMin: 1.2,
+    disengageDeepMax: 2.2
+  };
 
   // src/systems/view.js
   var viewHW = () => W / (2 * world.cam.z);
   var viewHH = () => H / (2 * world.cam.z);
   var viewArea = () => W / world.cam.z * (H / world.cam.z);
+
+  // src/world/fx.js
+  function burst(x, y, n, hue, gentle) {
+    const { parts } = world;
+    for (let i = 0; i < n; i++) {
+      const a = rand(TAU), sp = rand(gentle ? 40 : 70, gentle ? 130 : 320);
+      parts.push({
+        x,
+        y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp - 20,
+        r: rand(1.2, gentle ? 3 : 4.4),
+        life: rand(0.35, 0.9),
+        max: 1,
+        hue: hue + rand(-16, 16),
+        drag: 2.6
+      });
+      parts[parts.length - 1].max = parts[parts.length - 1].life;
+    }
+  }
+  var BUBBLE_MAX = 160;
+  function addBubble(x, y, size) {
+    if (world.bubbles.length >= BUBBLE_MAX) world.bubbles.shift();
+    world.bubbles.push({ x, y, r: size || rand(1.2, 3.4), v: rand(26, 74), ph: rand(TAU), a: rand(0.4, 0.9) });
+  }
+  function addText(x, y, txt, col) {
+    world.texts.push({ x, y, txt, col, life: 1.1, max: 1.1 });
+  }
+  function ring(x, y, r0, r1, life, col) {
+    world.rings.push({ x, y, r0, r1, life, max: life, col: col || "rgba(170,255,240,.55)" });
+  }
+  function updateFx(dt) {
+    const { parts, bubbles, rings, texts } = world;
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
+      p.life -= dt;
+      if (p.life <= 0) {
+        parts.splice(i, 1);
+        continue;
+      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      const d = Math.exp(-p.drag * dt);
+      p.vx *= d;
+      p.vy = p.vy * d - 16 * dt;
+    }
+    for (let i = bubbles.length - 1; i >= 0; i--) {
+      const b = bubbles[i];
+      b.y -= b.v * dt;
+      b.x += Math.sin(world.time * 2.4 + b.ph) * 18 * dt;
+      b.ph += dt * 2;
+      if (b.y < -30 || b.y < world.cam.y - viewHH() * 1.25) bubbles.splice(i, 1);
+    }
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const r = rings[i];
+      r.life -= dt;
+      if (r.life <= 0) rings.splice(i, 1);
+    }
+    for (let i = texts.length - 1; i >= 0; i--) {
+      const t = texts[i];
+      t.life -= dt;
+      t.y -= 26 * dt;
+      if (t.life <= 0) texts.splice(i, 1);
+    }
+  }
+
+  // src/world/ambient.js
+  var SHOAL_MAX = 3;
+  var MANTA_MAX = 2;
+  var VENT_MAX = 4;
+  function shoalTarget() {
+    return clamp(Math.round(viewArea() / 52e4), 1, SHOAL_MAX);
+  }
+  function mantaTarget() {
+    return clamp(Math.round(viewArea() / 11e5), 0, MANTA_MAX);
+  }
+  function ventTarget() {
+    if (depthM() < 55) return 0;
+    return clamp(Math.round(viewArea() / 76e4), 1, VENT_MAX);
+  }
+  function makeShoal(init) {
+    const hw = viewHW(), hh = viewHH();
+    const count = 9 + (Math.random() * 13 | 0);
+    const members = [];
+    for (let i = 0; i < count; i++) {
+      members.push({
+        ox: rand(-1, 1),
+        oy: rand(-0.62, 0.62),
+        ph: rand(TAU),
+        sz: rand(0.65, 1.15)
+      });
+    }
+    return {
+      x: world.cam.x + (init ? rand(-hw * 0.85, hw * 0.85) : rand(-hw, hw)),
+      y: clamp(world.cam.y + rand(-hh * 0.8, hh * 0.8), 140, 3e4),
+      vx: rand(16, 36) * (Math.random() < 0.5 ? -1 : 1),
+      vy: rand(-9, 9),
+      r: rand(30, 68),
+      hue: rand(176, 214),
+      ph: rand(TAU),
+      members
+    };
+  }
+  function makeManta(init) {
+    const hw = viewHW(), hh = viewHH();
+    return {
+      x: world.cam.x + (init ? rand(-hw * 0.9, hw * 0.9) : rand(-hw * 1.3, hw * 1.3)),
+      y: clamp(world.cam.y + rand(-hh * 0.75, hh * 0.75), 220, 3e4),
+      r: rand(62, 118),
+      vx: rand(15, 27) * (Math.random() < 0.5 ? -1 : 1),
+      vy: rand(-4, 4),
+      ph: rand(TAU),
+      pitch: rand(-0.12, 0.12)
+    };
+  }
+  function makeVent(init) {
+    const hw = viewHW(), hh = viewHH();
+    return {
+      x: world.cam.x + rand(-hw * 0.9, hw * 0.9),
+      // 贴在视野下缘附近，像从海底冒上来
+      y: clamp(world.cam.y + rand(hh * 0.45, hh * 1.15), 240, 3e4),
+      ph: rand(TAU),
+      rate: rand(0.28, 0.75),
+      t: rand(0.4),
+      hue: rand(14, 38)
+    };
+  }
+  function updateAmbient(dt) {
+    const { shoals, mantas, vents, cam } = world;
+    for (let i = shoals.length - 1; i >= 0; i--) {
+      const s = shoals[i];
+      s.ph += dt;
+      s.x += (s.vx + Math.sin(world.time * 0.4 + s.ph) * 8) * dt;
+      s.y += (s.vy + Math.cos(world.time * 0.33 + s.ph) * 6) * dt;
+      if (Math.abs(s.x - cam.x) > viewHW() * 1.6 || Math.abs(s.y - cam.y) > viewHH() * 1.6) {
+        shoals.splice(i, 1);
+      }
+    }
+    while (shoals.length < shoalTarget()) {
+      shoals.push(makeShoal(shoals.length === 0));
+    }
+    for (let i = mantas.length - 1; i >= 0; i--) {
+      const m = mantas[i];
+      m.ph += dt;
+      m.x += m.vx * dt;
+      m.y += (m.vy + Math.sin(world.time * 0.22 + m.ph) * 5) * dt;
+      if (Math.abs(m.x - cam.x) > viewHW() * 2.1 || Math.abs(m.y - cam.y) > viewHH() * 1.8) {
+        mantas.splice(i, 1);
+      }
+    }
+    while (mantas.length < mantaTarget()) {
+      mantas.push(makeManta(mantas.length === 0));
+    }
+    const vt = ventTarget();
+    for (let i = vents.length - 1; i >= 0; i--) {
+      const v = vents[i];
+      v.ph += dt;
+      if (Math.abs(v.x - cam.x) > viewHW() * 1.5 || Math.abs(v.y - cam.y) > viewHH() * 1.7) {
+        vents.splice(i, 1);
+        continue;
+      }
+      v.t -= dt;
+      if (v.t <= 0) {
+        v.t = v.rate * (0.6 + Math.random() * 0.8);
+        addBubble(v.x + rand(-5, 5), v.y + rand(-6, 6), rand(1.2, 3.2));
+      }
+    }
+    while (vents.length < vt) vents.push(makeVent(vents.length === 0));
+  }
+  function resetAmbient() {
+    world.shoals.length = 0;
+    world.mantas.length = 0;
+    world.vents.length = 0;
+    for (let i = 0; i < shoalTarget(); i++) world.shoals.push(makeShoal(true));
+    for (let i = 0; i < mantaTarget(); i++) world.mantas.push(makeManta(true));
+    for (let i = 0; i < ventTarget(); i++) world.vents.push(makeVent(true));
+  }
 
   // src/world/spawn.js
   function fishTarget() {
@@ -679,71 +881,9 @@
     for (let i = 0; i < nFood; i++) foods.push(makeFood(true));
     world.zoneIdx = -1;
     world.maxDepth = 0;
+    resetAmbient();
   }
   onResize(buildSnow);
-
-  // src/world/fx.js
-  function burst(x, y, n, hue, gentle) {
-    const { parts } = world;
-    for (let i = 0; i < n; i++) {
-      const a = rand(TAU), sp = rand(gentle ? 40 : 70, gentle ? 130 : 320);
-      parts.push({
-        x,
-        y,
-        vx: Math.cos(a) * sp,
-        vy: Math.sin(a) * sp - 20,
-        r: rand(1.2, gentle ? 3 : 4.4),
-        life: rand(0.35, 0.9),
-        max: 1,
-        hue: hue + rand(-16, 16),
-        drag: 2.6
-      });
-      parts[parts.length - 1].max = parts[parts.length - 1].life;
-    }
-  }
-  function addBubble(x, y, size) {
-    world.bubbles.push({ x, y, r: size || rand(1.2, 3.4), v: rand(26, 74), ph: rand(TAU), a: rand(0.4, 0.9) });
-  }
-  function addText(x, y, txt, col) {
-    world.texts.push({ x, y, txt, col, life: 1.1, max: 1.1 });
-  }
-  function ring(x, y, r0, r1, life, col) {
-    world.rings.push({ x, y, r0, r1, life, max: life, col: col || "rgba(170,255,240,.55)" });
-  }
-  function updateFx(dt) {
-    const { parts, bubbles, rings, texts } = world;
-    for (let i = parts.length - 1; i >= 0; i--) {
-      const p = parts[i];
-      p.life -= dt;
-      if (p.life <= 0) {
-        parts.splice(i, 1);
-        continue;
-      }
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      const d = Math.exp(-p.drag * dt);
-      p.vx *= d;
-      p.vy = p.vy * d - 16 * dt;
-    }
-    for (let i = bubbles.length - 1; i >= 0; i--) {
-      const b = bubbles[i];
-      b.y -= b.v * dt;
-      b.x += Math.sin(world.time * 2.4 + b.ph) * 18 * dt;
-      b.ph += dt * 2;
-      if (b.y < -30) bubbles.splice(i, 1);
-    }
-    for (let i = rings.length - 1; i >= 0; i--) {
-      const r = rings[i];
-      r.life -= dt;
-      if (r.life <= 0) rings.splice(i, 1);
-    }
-    for (let i = texts.length - 1; i >= 0; i--) {
-      const t = texts[i];
-      t.life -= dt;
-      t.y -= 26 * dt;
-      if (t.life <= 0) texts.splice(i, 1);
-    }
-  }
 
   // src/world/audio.js
   var AC = null;
@@ -951,6 +1091,17 @@
     const px = player.x, py = player.y, pr = player.r;
     const hunting = world.mode === "play";
     let hunters = 0;
+    const agg = clamp(
+      (depthM() - DEPTH_SCALING.startM) / (DEPTH_SCALING.fullM - DEPTH_SCALING.startM),
+      0,
+      1
+    );
+    const maxHunters = Math.round(lerp(DEPTH_SCALING.maxHuntersSurface, DEPTH_SCALING.maxHuntersDeep, agg));
+    const huntRadius = lerp(DEPTH_SCALING.huntRadiusSurface, DEPTH_SCALING.huntRadiusDeep, agg);
+    const huntMul = lerp(DEPTH_SCALING.huntSpeedMulSurface, DEPTH_SCALING.huntSpeedMulDeep, agg);
+    const lungeMul = lerp(DEPTH_SCALING.lungeSpeedMulSurface, DEPTH_SCALING.lungeSpeedMulDeep, agg);
+    const disengageMin = lerp(DEPTH_SCALING.disengageSurfaceMin, DEPTH_SCALING.disengageDeepMin, agg);
+    const disengageMax = lerp(DEPTH_SCALING.disengageSurfaceMax, DEPTH_SCALING.disengageDeepMax, agg);
     for (const f of fishes) {
       const dx = px - f.x, dy = py - f.y;
       const dist = Math.hypot(dx, dy) || 1;
@@ -962,10 +1113,10 @@
       f.lungeCd -= dt;
       if (f.calm > 0) f.calm -= dt;
       if (wasLunging && f.lunge <= 0) {
-        f.giveup = rand(PREDATOR.disengageMin, PREDATOR.disengageMax);
+        f.giveup = rand(disengageMin, disengageMax);
         f.hunt = 0;
       }
-      if (hunting && isPred && f.calm <= 0 && hunters < PREDATOR.maxHunters && dist < PREDATOR.huntRadius && f.giveup <= 0) {
+      if (hunting && isPred && f.calm <= 0 && hunters < maxHunters && dist < huntRadius && f.giveup <= 0) {
         hunters++;
         const lead = 0.16;
         const tx = px + player.vx * lead - f.x;
@@ -973,7 +1124,7 @@
         const m = Math.hypot(tx, ty) || 1;
         ax = tx / m;
         ay = ty / m;
-        spd *= PREDATOR.huntSpeedMul;
+        spd *= huntMul;
         f.danger = 1;
         f.hunt += dt;
         if (f.hunt > 6) {
@@ -1005,7 +1156,7 @@
         spd *= PREDATOR.windupSpeedMul;
         if (f.windup <= 0) f.lunge = PREDATOR.lungeDur;
       } else if (f.lunge > 0) {
-        spd *= PREDATOR.lungeSpeedMul;
+        spd *= lungeMul;
       } else if (hunting && f.calm <= 0 && f.danger > 0.5 && dist < PREDATOR.lungeRadius && f.lungeCd <= 0) {
         f.windup = PREDATOR.windup;
         f.lungeCd = rand(PREDATOR.lungeCdMin, PREDATOR.lungeCdMax);
@@ -1562,6 +1713,185 @@
     ctx.restore();
   }
 
+  // src/render/ambient.js
+  var KELP_LAYERS = [
+    { par: 0.3, spacing: 118, hMin: 210, hMax: 400, hue: 154, sat: 44, li: 21, alpha: 0.42, width: 30 },
+    { par: 0.5, spacing: 156, hMin: 160, hMax: 310, hue: 147, sat: 40, li: 15, alpha: 0.6, width: 38 },
+    { par: 0.72, spacing: 210, hMin: 110, hMax: 210, hue: 142, sat: 34, li: 11, alpha: 0.72, width: 44 }
+  ];
+  function drawKelp() {
+    const d = depthM();
+    const fade = clamp(1 - (d - 40) / 130, 0, 1);
+    if (fade <= 0.03) return;
+    const { cam, time } = world;
+    ctx.save();
+    for (let li = 0; li < KELP_LAYERS.length; li++) {
+      const L = KELP_LAYERS[li];
+      const span = W + L.spacing * 2;
+      const count = Math.ceil(span / L.spacing);
+      const baseY = H + 26;
+      const off = cam.x * L.par;
+      ctx.fillStyle = hsl(L.hue, L.sat, L.li, L.alpha * fade);
+      ctx.beginPath();
+      for (let i = 0; i < count; i++) {
+        let x = i * L.spacing - off;
+        x = (x % span + span) % span - L.spacing;
+        if (x < -80 || x > W + 80) continue;
+        const seed = i * 7.31 + li * 13.7;
+        const h = lerp(L.hMin, L.hMax, Math.abs(Math.sin(seed * 1.7)));
+        const w = L.width * (0.8 + 0.4 * Math.abs(Math.cos(seed)));
+        const sway = Math.sin(time * 0.62 + seed) * (10 + h * 0.055);
+        const lean = Math.sin(seed * 2.3) * w * 0.9;
+        const topX = x + sway + lean;
+        const topY = baseY - h;
+        const wv = w * 0.16;
+        ctx.moveTo(x - w * 0.5, baseY + 10);
+        ctx.bezierCurveTo(
+          x - w * 0.46 + sway * 0.3,
+          baseY - h * 0.26,
+          x - w * 0.3 + sway * 0.55 + wv,
+          baseY - h * 0.42,
+          x - w * 0.34 + sway * 0.6,
+          baseY - h * 0.56
+        );
+        ctx.bezierCurveTo(
+          x - w * 0.22 + sway * 0.8,
+          baseY - h * 0.72,
+          topX - w * 0.16,
+          baseY - h * 0.88,
+          topX,
+          topY
+        );
+        ctx.bezierCurveTo(
+          topX + w * 0.16,
+          baseY - h * 0.86,
+          x + w * 0.3 + sway * 0.7 - wv,
+          baseY - h * 0.66,
+          x + w * 0.36 + sway * 0.5,
+          baseY - h * 0.5
+        );
+        ctx.bezierCurveTo(
+          x + w * 0.42 + sway * 0.3,
+          baseY - h * 0.32,
+          x + w * 0.46,
+          baseY - h * 0.14,
+          x + w * 0.5,
+          baseY + 10
+        );
+        ctx.closePath();
+      }
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+  function drawShoals() {
+    const { shoals, time } = world;
+    for (const s of shoals) {
+      const t = time * 1.5 + s.ph;
+      const cx = s.x + Math.sin(t * 0.5) * 7;
+      const cy = s.y + Math.cos(t * 0.42) * 5;
+      ctx.beginPath();
+      for (const m of s.members) {
+        const wob = Math.sin(t * 1.1 + m.ph);
+        const mx = cx + m.ox * s.r * (0.92 + 0.08 * wob);
+        const my = cy + m.oy * s.r * 0.58 * (0.92 + 0.08 * Math.cos(t * 1.3 + m.ph));
+        const len = 5.2 * m.sz;
+        const hgt = 1.9 * m.sz;
+        ctx.moveTo(mx - len, my);
+        ctx.quadraticCurveTo(mx, my - hgt, mx + len, my);
+        ctx.quadraticCurveTo(mx, my + hgt, mx - len, my);
+      }
+      ctx.fillStyle = hsl(s.hue, 68, 64, 0.62);
+      ctx.fill();
+    }
+  }
+  function drawMantas() {
+    const { mantas, time } = world;
+    for (const m of mantas) {
+      const R = m.r;
+      const flap = Math.sin(time * 0.85 + m.ph);
+      const span = 0.85 + flap * 0.3;
+      ctx.save();
+      ctx.translate(m.x, m.y);
+      ctx.scale(m.vx < 0 ? -1 : 1, 1);
+      ctx.rotate(m.pitch);
+      ctx.beginPath();
+      ctx.moveTo(R * 0.62, 0);
+      ctx.quadraticCurveTo(R * 0.3, -R * 0.3 * span, R * 0.02, -R * 0.62 * span);
+      ctx.quadraticCurveTo(-R * 0.3, -R * 0.95 * span, -R * 0.58, -R * 0.96 * span);
+      ctx.quadraticCurveTo(-R * 0.34, -R * 0.52 * span, -R * 0.44, -R * 0.22);
+      ctx.quadraticCurveTo(-R * 0.5, -R * 0.07, -R * 0.52, 0);
+      ctx.quadraticCurveTo(-R * 0.5, R * 0.07, -R * 0.44, R * 0.22);
+      ctx.quadraticCurveTo(-R * 0.34, R * 0.52 * span, -R * 0.58, R * 0.96 * span);
+      ctx.quadraticCurveTo(-R * 0.3, R * 0.95 * span, R * 0.02, R * 0.62 * span);
+      ctx.quadraticCurveTo(R * 0.3, R * 0.3 * span, R * 0.62, 0);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(6,22,34,.42)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(150,215,235,.14)";
+      ctx.lineWidth = Math.max(1, R * 0.01);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(R * 0.42, 0);
+      ctx.quadraticCurveTo(R * 0.02, -R * 0.1, -R * 0.48, 0);
+      ctx.quadraticCurveTo(R * 0.02, R * 0.1, R * 0.42, 0);
+      ctx.fillStyle = "rgba(110,180,205,.1)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-R * 0.52, -R * 0.03);
+      ctx.quadraticCurveTo(-R * 0.82, flap * R * 0.05, -R * 1.12, flap * R * 0.09);
+      ctx.quadraticCurveTo(-R * 0.82, R * 0.015 + flap * R * 0.05, -R * 0.52, R * 0.03);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(10,32,46,.4)";
+      ctx.fill();
+      ctx.fillStyle = "rgba(190,240,250,.22)";
+      ctx.beginPath();
+      ctx.arc(R * 0.46, -R * 0.09, R * 0.028, 0, TAU);
+      ctx.arc(R * 0.46, R * 0.09, R * 0.028, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+  function drawVents() {
+    const { vents, time } = world;
+    for (const v of vents) {
+      const pulse = 0.75 + 0.25 * Math.sin(time * 1.6 + v.ph);
+      const g = ctx.createRadialGradient(v.x, v.y, 0, v.x, v.y, 150);
+      g.addColorStop(0, hsl(v.hue, 92, 62, 0.3 * pulse));
+      g.addColorStop(0.35, hsl(v.hue, 86, 50, 0.12 * pulse));
+      g.addColorStop(1, hsl(v.hue, 80, 40, 0));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(v.x, v.y, 150, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(v.x - 26, v.y + 22);
+      ctx.quadraticCurveTo(v.x - 14, v.y - 14, v.x - 4, v.y - 18);
+      ctx.quadraticCurveTo(v.x + 10, v.y - 14, v.x + 24, v.y + 22);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(5,14,20,.85)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(v.x - 5, v.y + 2);
+      ctx.quadraticCurveTo(v.x, v.y - 14, v.x + 5, v.y + 2);
+      ctx.closePath();
+      ctx.fillStyle = hsl(v.hue, 96, 66, 0.55 * pulse);
+      ctx.fill();
+      const hh = 120 + 40 * pulse;
+      for (let k = 0; k < 3; k++) {
+        const spread = 12 + k * 16;
+        const tall = hh * (1 - k * 0.22);
+        ctx.beginPath();
+        ctx.moveTo(v.x - spread * 0.5, v.y - 10);
+        ctx.quadraticCurveTo(v.x - spread, v.y - tall * 0.55, v.x - spread * 0.2, v.y - tall);
+        ctx.quadraticCurveTo(v.x + spread * 0.9, v.y - tall * 0.55, v.x + spread * 0.5, v.y - 10);
+        ctx.closePath();
+        ctx.fillStyle = hsl(v.hue, 78, 58, (0.1 - k * 0.025) * pulse);
+        ctx.fill();
+      }
+    }
+  }
+
   // src/render/creatures.js
   var gradCache = /* @__PURE__ */ new Map();
   function cached(key, make) {
@@ -2030,12 +2360,16 @@
     const { cam, player } = world;
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     drawWater(dt);
+    drawKelp();
     const sx = (Math.random() - 0.5) * world.shake;
     const sy = (Math.random() - 0.5) * world.shake;
     ctx.save();
     ctx.translate(W / 2 + sx, H / 2 + sy);
     ctx.scale(cam.z, cam.z);
     ctx.translate(-cam.x, -cam.y);
+    drawVents();
+    drawMantas();
+    drawShoals();
     drawFood();
     drawList.length = 0;
     for (const j of world.jellies) drawList.push(j);
@@ -2074,6 +2408,7 @@
     updateFish(dt);
     updateJellies(dt);
     updateFoods(dt);
+    updateAmbient(dt);
     updateFx(dt);
     updateCamera(dt);
     if (world.mode === "over") {

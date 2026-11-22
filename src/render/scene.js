@@ -4,6 +4,7 @@
 import { ctx, W, H, DPR } from '../core/viewport.js';
 import { world } from '../world/world.js';
 import { drawWater } from './background.js';
+import { drawKelp, drawMantas, drawShoals, drawVents } from './ambient.js';
 import { drawFood, drawFish, drawJelly, drawPlayer } from './creatures.js';
 import { drawFx } from './fx.js';
 import { drawOverlay } from './overlay.js';
@@ -15,6 +16,7 @@ export function render(dt) {
 
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   drawWater(dt);
+  drawKelp();          // 屏幕空间视差层
 
   const sx = (Math.random() - 0.5) * world.shake;
   const sy = (Math.random() - 0.5) * world.shake;
@@ -24,6 +26,9 @@ export function render(dt) {
   ctx.scale(cam.z, cam.z);
   ctx.translate(-cam.x, -cam.y);
 
+  drawVents();
+  drawMantas();
+  drawShoals();
   drawFood();
 
   // depth-sorted creatures
