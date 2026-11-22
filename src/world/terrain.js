@@ -156,7 +156,7 @@ export function shelfAt(n) {
         shelf.kelp.push({
           ox: x,
           h: (160 + hash(ks + 1) * 210) * (0.55 + kelpFade * 0.45),
-          w: 22 + hash(ks + 2) * 22,
+          w: 15 + hash(ks + 2) * 15,
           ph: hash(ks + 3) * TAU,
         });
       }

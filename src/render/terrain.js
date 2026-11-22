@@ -31,14 +31,14 @@ function drawShelfKelp(o) {
   for (const k of o.kelp) {
     const baseX = k.ox;
     const baseY = topY(o, baseX) + 3;
-    const sway = Math.sin(t * 0.62 + k.ph) * (9 + k.h * 0.05);
+    const sway = Math.sin(t * 0.62 + k.ph) * (18 + k.h * 0.11);
     const topX = baseX + sway;
     const topYk = baseY - k.h;
     const w = k.w;
 
     // 等宽的叶带 + 圆头：之前从宽基部收到尖顶，看起来像三角尖刺
     const halfW = w * 0.46;
-    const tipW = w * 0.32;
+    const tipW = w * 0.2;
 
     ctx.moveTo(baseX - halfW, baseY + 4);
     ctx.bezierCurveTo(
@@ -46,7 +46,7 @@ function drawShelfKelp(o) {
       topX - tipW + sway * 0.78, baseY - k.h * 0.7,
       topX - tipW, topYk,
     );
-    ctx.quadraticCurveTo(topX, topYk - w * 0.62, topX + tipW, topYk);
+    ctx.quadraticCurveTo(topX, topYk - w * 0.5, topX + tipW, topYk);
     ctx.bezierCurveTo(
       topX + tipW + sway * 0.78, baseY - k.h * 0.7,
       baseX + halfW * 1.06 + sway * 0.3, baseY - k.h * 0.34,
@@ -174,36 +174,92 @@ function drawShelf(o) {
   drawCoral(o);
 }
 
-/** 并集圆填充：先一圈暗边，再主体，再内圈提亮。不要 stroke（会露出内部弧线）。 */
-function solidBlob(o, hue, sat, lit, highlight) {
-  const g = 3;
-  ctx.beginPath();
-  for (const c of o.parts) {
-    ctx.moveTo(c.x + c.r + g, c.y);
-    ctx.arc(c.x, c.y, c.r + g, 0, TAU);
+/** 取一组圆的重心和最大外接距离，用来给岩石定一个不越界的多边形。 */
+function rockReach(parts) {
+  let cx = 0, cy = 0, wsum = 0;
+  for (const c of parts) {
+    const w = c.r * c.r;
+    cx += c.x * w; cy += c.y * w; wsum += w;
   }
-  ctx.fillStyle = hsl(hue, sat * 0.8, lit * 0.62, 0.95);
+  cx /= wsum || 1; cy /= wsum || 1;
+
+  let reach = 0;
+  for (const c of parts) {
+    reach = Math.max(reach, Math.hypot(c.x - cx, c.y - cy) + c.r);
+  }
+  return { cx, cy, reach };
+}
+
+/**
+ * 低多边形岩石：不规则多边形 + 从中心切出的棱面。
+ * 之前用"一串圆并集"画石头，轮廓天生是圆的，加上球状高光就像一颗颗球。
+ * 多边形的最大半径取碰撞外接圆的 0.92，保证视觉不会超出碰撞范围。
+ */
+function drawRock(o, parts = o.parts, seed = o.seed) {
+  const { cx, cy, reach } = rockReach(parts);
+  const r0 = reach * 0.92;
+  const n = 8 + Math.floor(hash(seed + 0.7) * 3);
+
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TAU + (hash(seed + i * 2.7) - 0.5) * 0.34;
+    const rad = r0 * (0.7 + hash(seed + i * 5.3) * 0.3);
+    pts.push({ x: cx + Math.cos(a) * rad, y: cy + Math.sin(a) * rad });
+  }
+
+  // 主体
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < n; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.closePath();
+  ctx.fillStyle = hsl(o.hue, 22, o.lit, 0.98);
   ctx.fill();
 
-  ctx.beginPath();
-  for (const c of o.parts) {
-    ctx.moveTo(c.x + c.r, c.y);
-    ctx.arc(c.x, c.y, c.r, 0, TAU);
-  }
-  ctx.fillStyle = hsl(hue, sat, lit, 0.98);
-  ctx.fill();
-
-  if (highlight) {
-    // 不用同心缩小（那会看起来像个球），而是在顶面抹一道偏上的窄高光
+  // 棱面：中心到相邻顶点的三角，明暗按朝向和伪随机略微起伏
+  for (let i = 0; i < n; i++) {
+    const a = pts[i], b = pts[(i + 1) % n];
     ctx.beginPath();
-    ctx.ellipse(o.x, o.y - o.r * 0.42, o.r * 0.72, o.r * 0.24, 0, 0, TAU);
-    ctx.fillStyle = hsl(hue, sat * 0.9, lit + 10, 0.28);
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.closePath();
+
+    // 朝上的面偏亮（假想光从水面来）
+    const midY = (a.y + b.y) / 2;
+    const up = clamp((cy - midY) / (r0 * 0.9), -1, 1);
+    const jitter = (hash(seed + i * 3.1) - 0.5) * 5;
+    ctx.fillStyle = hsl(o.hue, 20, o.lit + up * 6 + jitter, 0.5);
     ctx.fill();
   }
+
+  // 轮廓：单条闭合多边形，描边不会露出内部弧线
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < n; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.closePath();
+  ctx.strokeStyle = hsl(o.hue, 24, Math.max(3, o.lit - 8), 0.55);
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+
+  // 几道裂纹
+  ctx.beginPath();
+  for (let k = 0; k < 2; k++) {
+    const i = Math.floor(hash(seed + k * 9.7) * n);
+    const a = pts[i];
+    ctx.moveTo(cx + (a.x - cx) * 0.2, cy + (a.y - cy) * 0.2);
+    ctx.lineTo(cx + (a.x - cx) * 0.72, cy + (a.y - cy) * 0.72);
+  }
+  ctx.strokeStyle = hsl(o.hue, 22, Math.max(3, o.lit - 7), 0.4);
+  ctx.lineWidth = 1.1;
+  ctx.stroke();
 }
 
 function drawCrevice(o) {
-  solidBlob(o, o.hue, 28, o.lit, true);
+  // 左右两簇各自的圆，分别当作一块岩石来画
+  const left = o.parts.filter(c => c.x < o.x);
+  const right = o.parts.filter(c => c.x >= o.x);
+  drawRock(o, left, o.seed);
+  drawRock(o, right, o.seed + 31.7);
 
   // 两块石头之间的暗缝
   const halfH = o.r * 0.62;
@@ -272,7 +328,7 @@ export function drawTerrain() {
     if (o.kind === 'shelf') drawShelf(o);
   }
   for (const o of world.terrain) {
-    if (o.kind === 'boulder') { solidBlob(o, o.hue, 26, o.lit, true); drawCoral(o); }
+    if (o.kind === 'boulder') { drawRock(o); drawCoral(o); }
     else if (o.kind === 'crevice') drawCrevice(o);
     else if (o.kind === 'wreck') drawWreck(o);
   }

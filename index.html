@@ -827,7 +827,7 @@
           shelf.kelp.push({
             ox: x,
             h: (160 + hash(ks + 1) * 210) * (0.55 + kelpFade * 0.45),
-            w: 22 + hash(ks + 2) * 22,
+            w: 15 + hash(ks + 2) * 15,
             ph: hash(ks + 3) * TAU
           });
         }
@@ -2242,12 +2242,12 @@
     for (const k of o.kelp) {
       const baseX = k.ox;
       const baseY = topY(o, baseX) + 3;
-      const sway = Math.sin(t * 0.62 + k.ph) * (9 + k.h * 0.05);
+      const sway = Math.sin(t * 0.62 + k.ph) * (18 + k.h * 0.11);
       const topX = baseX + sway;
       const topYk = baseY - k.h;
       const w = k.w;
       const halfW = w * 0.46;
-      const tipW = w * 0.32;
+      const tipW = w * 0.2;
       ctx.moveTo(baseX - halfW, baseY + 4);
       ctx.bezierCurveTo(
         baseX - halfW * 1.06 + sway * 0.3,
@@ -2257,7 +2257,7 @@
         topX - tipW,
         topYk
       );
-      ctx.quadraticCurveTo(topX, topYk - w * 0.62, topX + tipW, topYk);
+      ctx.quadraticCurveTo(topX, topYk - w * 0.5, topX + tipW, topYk);
       ctx.bezierCurveTo(
         topX + tipW + sway * 0.78,
         baseY - k.h * 0.7,
@@ -2372,31 +2372,74 @@
     drawShelfKelp(o);
     drawCoral(o);
   }
-  function solidBlob(o, hue, sat, lit, highlight) {
-    const g = 3;
-    ctx.beginPath();
-    for (const c of o.parts) {
-      ctx.moveTo(c.x + c.r + g, c.y);
-      ctx.arc(c.x, c.y, c.r + g, 0, TAU);
+  function rockReach(parts) {
+    let cx = 0, cy = 0, wsum = 0;
+    for (const c of parts) {
+      const w = c.r * c.r;
+      cx += c.x * w;
+      cy += c.y * w;
+      wsum += w;
     }
-    ctx.fillStyle = hsl(hue, sat * 0.8, lit * 0.62, 0.95);
-    ctx.fill();
-    ctx.beginPath();
-    for (const c of o.parts) {
-      ctx.moveTo(c.x + c.r, c.y);
-      ctx.arc(c.x, c.y, c.r, 0, TAU);
+    cx /= wsum || 1;
+    cy /= wsum || 1;
+    let reach = 0;
+    for (const c of parts) {
+      reach = Math.max(reach, Math.hypot(c.x - cx, c.y - cy) + c.r);
     }
-    ctx.fillStyle = hsl(hue, sat, lit, 0.98);
+    return { cx, cy, reach };
+  }
+  function drawRock(o, parts = o.parts, seed = o.seed) {
+    const { cx, cy, reach } = rockReach(parts);
+    const r0 = reach * 0.92;
+    const n = 8 + Math.floor(hash(seed + 0.7) * 3);
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const a = i / n * TAU + (hash(seed + i * 2.7) - 0.5) * 0.34;
+      const rad = r0 * (0.7 + hash(seed + i * 5.3) * 0.3);
+      pts.push({ x: cx + Math.cos(a) * rad, y: cy + Math.sin(a) * rad });
+    }
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < n; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fillStyle = hsl(o.hue, 22, o.lit, 0.98);
     ctx.fill();
-    if (highlight) {
+    for (let i = 0; i < n; i++) {
+      const a = pts[i], b = pts[(i + 1) % n];
       ctx.beginPath();
-      ctx.ellipse(o.x, o.y - o.r * 0.42, o.r * 0.72, o.r * 0.24, 0, 0, TAU);
-      ctx.fillStyle = hsl(hue, sat * 0.9, lit + 10, 0.28);
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.closePath();
+      const midY = (a.y + b.y) / 2;
+      const up = clamp((cy - midY) / (r0 * 0.9), -1, 1);
+      const jitter = (hash(seed + i * 3.1) - 0.5) * 5;
+      ctx.fillStyle = hsl(o.hue, 20, o.lit + up * 6 + jitter, 0.5);
       ctx.fill();
     }
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < n; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.strokeStyle = hsl(o.hue, 24, Math.max(3, o.lit - 8), 0.55);
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+    ctx.beginPath();
+    for (let k = 0; k < 2; k++) {
+      const i = Math.floor(hash(seed + k * 9.7) * n);
+      const a = pts[i];
+      ctx.moveTo(cx + (a.x - cx) * 0.2, cy + (a.y - cy) * 0.2);
+      ctx.lineTo(cx + (a.x - cx) * 0.72, cy + (a.y - cy) * 0.72);
+    }
+    ctx.strokeStyle = hsl(o.hue, 22, Math.max(3, o.lit - 7), 0.4);
+    ctx.lineWidth = 1.1;
+    ctx.stroke();
   }
   function drawCrevice(o) {
-    solidBlob(o, o.hue, 28, o.lit, true);
+    const left = o.parts.filter((c) => c.x < o.x);
+    const right = o.parts.filter((c) => c.x >= o.x);
+    drawRock(o, left, o.seed);
+    drawRock(o, right, o.seed + 31.7);
     const halfH = o.r * 0.62;
     ctx.beginPath();
     ctx.ellipse(o.x, o.y, o.gap * 0.82, halfH * 1.05, 0, 0, TAU);
@@ -2453,7 +2496,7 @@
     }
     for (const o of world.terrain) {
       if (o.kind === "boulder") {
-        solidBlob(o, o.hue, 26, o.lit, true);
+        drawRock(o);
         drawCoral(o);
       } else if (o.kind === "crevice") drawCrevice(o);
       else if (o.kind === "wreck") drawWreck(o);
