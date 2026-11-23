@@ -15,6 +15,7 @@ const { world } = await import('../src/world/world.js');
 const { resetWorld, addFish } = await import('../src/world/spawn.js');
 const { updateFish } = await import('../src/systems/fish.js');
 const { FISH, PREDATOR, PLAYER } = await import('../src/config/tuning.js');
+const { terrainBlocksLine } = await import('../src/world/terrain.js');
 const { SPECS } = await import('../src/config/species.js');
 
 function makeFish(over = {}) {
@@ -35,6 +36,8 @@ function clearWorld() {
   world.parts.length = 0;
   world.texts.length = 0;
   world.rings.length = 0;
+  // 视线遮挡会挡掉追击，这些用例要单独测扑咬/围攻，先把地形清掉
+  world.terrain.length = 0;
 }
 
 test('巡游的鱼不会来回摆动（朝向翻转率有上界）', () => {
@@ -237,4 +240,106 @@ test('一次扑咬结束后会脱战，不会咬完接着咬', () => {
 
   for (let i = 0; i < 30; i++) updateFish(1 / 60);
   assert.ok(hunter.giveup > 0, '扑咬结束后应进入脱战状态');
+});
+
+/* ---------------- 视线遮挡 ---------------- */
+
+function aabbOf(parts) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const c of parts) {
+    minX = Math.min(minX, c.x - c.r); maxX = Math.max(maxX, c.x + c.r);
+    minY = Math.min(minY, c.y - c.r); maxY = Math.max(maxY, c.y + c.r);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+function addWall(x, y, r) {
+  const parts = [{ x, y, r }];
+  world.terrain.push({ kind: 'rock', x, y, r, parts, ...aabbOf(parts) });
+}
+
+test('地形会挡住两点之间的视线', () => {
+  world.terrain.length = 0;
+  // 石头正好卡在 (0,0) 与 (400,0) 之间
+  addWall(200, 0, 60);
+
+  assert.equal(terrainBlocksLine(0, 0, 400, 0), true, '石头在中间应挡住');
+  assert.equal(terrainBlocksLine(0, 0, 120, 0), false, '石头在更远处不该挡住');
+  assert.equal(terrainBlocksLine(0, 200, 400, 200), false, '平行错开的视线不该被挡');
+});
+
+test('躲到石头后面，猎手感知不到玩家', () => {
+  seedRandom(4040);
+  world.mode = 'play';
+  resetWorld();
+  clearWorld();
+
+  world.player.x = 0;
+  world.player.y = 660;
+  world.player.r = 24;
+
+  // 玩家与猎手之间摆一块大石头
+  addWall(160, 660, 90);
+
+  const hunter = makeFish({
+    x: 320, y: 660, r: 45, spec: SPECS.shark, key: 'shark',
+    calm: 0, danger: 0, giveup: 0, hunt: 0,
+  });
+  world.fishes.push(hunter);
+
+  for (let i = 0; i < 120; i++) {
+    updateFish(1 / 60);
+    assert.equal(hunter.danger, 0, `第 ${i} 帧不该进入追击（视线被挡）`);
+  }
+});
+
+test('视线通畅时猎手会进入追击并拉近距离', () => {
+  seedRandom(4141);
+  world.mode = 'play';
+  resetWorld();
+  clearWorld();
+
+  world.player.x = 0;
+  world.player.y = 660;
+  world.player.r = 24;
+
+  const hunter = makeFish({
+    x: 320, y: 660, r: 45, spec: SPECS.shark, key: 'shark',
+    calm: 0, danger: 0, giveup: 0, hunt: 0,
+  });
+  world.fishes.push(hunter);
+
+  const d0 = Math.hypot(hunter.x - world.player.x, hunter.y - world.player.y);
+  for (let i = 0; i < 60; i++) updateFish(1 / 60);
+  const d1 = Math.hypot(hunter.x - world.player.x, hunter.y - world.player.y);
+
+  assert.equal(hunter.danger, 1, '视线通畅应进入追击');
+  assert.ok(d1 < d0 - 20, `追击一秒内应明显拉近: ${d0.toFixed(0)} -> ${d1.toFixed(0)}`);
+});
+
+test('追击转向足够灵敏：不会绕着玩家兜大圈', () => {
+  seedRandom(5151);
+  world.mode = 'play';
+  resetWorld();
+  clearWorld();
+
+  world.player.x = 0;
+  world.player.y = 660;
+  world.player.r = 24;
+
+  // 猎手横向掠过，需要快速转向才能咬到
+  const hunter = makeFish({
+    x: -120, y: 660, vx: 260, vy: 0, r: 45, spec: SPECS.shark, key: 'shark',
+    calm: 0, danger: 0, giveup: 0, hunt: 0, lungeCd: 99,
+  });
+  world.fishes.push(hunter);
+
+  let minDist = Infinity;
+  for (let i = 0; i < 90; i++) {
+    updateFish(1 / 60);
+    minDist = Math.min(minDist, Math.hypot(hunter.x - world.player.x, hunter.y - world.player.y));
+  }
+
+  // 1.5 秒内应该能压到很近（否则就是"灵敏度不足"）
+  assert.ok(minDist < 90, `追击 1.5 秒最近只到 ${minDist.toFixed(0)}px，转向太钝`);
 });

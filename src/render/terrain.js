@@ -114,6 +114,18 @@ function drawShelf(o) {
   const yt = x => topY(o, x);
   const yb = x => botY(o, x);
 
+  const traceSeg = (a, b) => {
+    ctx.beginPath();
+    ctx.moveTo(a, yt(a));
+    for (let x = a + step; x < b; x += step) ctx.lineTo(x, yt(x));
+    ctx.lineTo(b, yt(b));
+    ctx.quadraticCurveTo(b + o.cr * 0.26, o.y, b, yb(b));
+    for (let x = b - step; x > a; x -= step) ctx.lineTo(x, yb(x));
+    ctx.lineTo(a, yb(a));
+    ctx.quadraticCurveTo(a - o.cr * 0.26, o.y, a, yt(a));
+    ctx.closePath();
+  };
+
   for (const [a, b] of o.solids) {
     // 岩体：竖向渐变，顶亮底暗
     const grad = ctx.createLinearGradient(0, o.y - o.cr, 0, o.y + o.cr);
@@ -121,17 +133,7 @@ function drawShelf(o) {
     grad.addColorStop(0.45, hsl(tint.hue, tint.sat + 4, tint.lit));
     grad.addColorStop(1, hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 7)));
 
-    ctx.beginPath();
-    ctx.moveTo(a, yt(a));
-    for (let x = a + step; x < b; x += step) ctx.lineTo(x, yt(x));
-    ctx.lineTo(b, yt(b));
-    // 右端鼓成圆弧，不是直切
-    ctx.quadraticCurveTo(b + o.cr * 0.85, o.y, b, yb(b));
-    for (let x = b - step; x > a; x -= step) ctx.lineTo(x, yb(x));
-    ctx.lineTo(a, yb(a));
-    // 左端同理
-    ctx.quadraticCurveTo(a - o.cr * 0.85, o.y, a, yt(a));
-    ctx.closePath();
+    traceSeg(a, b);
     ctx.fillStyle = grad;
     ctx.fill();
 
@@ -147,28 +149,73 @@ function drawShelf(o) {
     ctx.fillStyle = hsl(tint.hue, tint.sat + 8, tint.lit + 16, 0.5);
     ctx.fill();
 
-    // 嵌在顶面的碎石，打断那条直线
-    const bumpCount = Math.max(2, Math.floor((b - a) / 130));
-    for (let i = 0; i < bumpCount; i++) {
-      const rx = a + ((i + 0.5) / bumpCount) * (b - a) + (hash(o.seed + i * 3.7) - 0.5) * 40;
-      const rr = 7 + hash(o.seed + i * 5.1) * 13;
-      ctx.beginPath();
-      ctx.ellipse(rx, yt(rx) + rr * 0.35, rr * 1.35, rr * 0.75, 0, 0, TAU);
-      ctx.fillStyle = hsl(tint.hue, tint.sat + 2, tint.lit + 4, 0.85);
-      ctx.fill();
-    }
+    // 纹理统统裁剪在岩体轮廓内，避免线条/颗粒溢到水里
+    ctx.save();
+    traceSeg(a, b);
+    ctx.clip();
 
-    // 层理：多几条、带起伏
-    for (let k = 1; k <= 4; k++) {
-      const baseY = o.y - o.cr * 0.28 + (o.cr * 0.42) * k;
-      ctx.beginPath();
+    // 细层理：一次成路径、只 stroke 一次
+    const strataStep = Math.max(46, (b - a) / 38);
+    ctx.beginPath();
+    for (let k = 0; k < 8; k++) {
+      const baseY = o.y - o.cr * 0.62 + (o.cr * 1.3 / 8) * k
+        + (hash(o.seed + k * 2.3) - 0.5) * o.cr * 0.06;
       ctx.moveTo(a, baseY);
-      for (let x = a + step * 2; x < b; x += step * 2) {
-        ctx.lineTo(x, baseY + Math.sin(x * 0.02 + o.seed + k * 1.7) * (2 + k));
+      for (let x = a + strataStep; x < b; x += strataStep) {
+        ctx.lineTo(x, baseY + Math.sin(x * 0.013 + o.seed + k * 1.3) * (1.4 + k * 0.45));
       }
-      ctx.strokeStyle = hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 8), 0.34 + k * 0.05);
-      ctx.lineWidth = 1.4;
-      ctx.stroke();
+    }
+    ctx.strokeStyle = hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 7), 0.22);
+    ctx.lineWidth = 1.1;
+    ctx.stroke();
+
+    // 颗粒与凹坑：这是"质感"的主要来源，同样一次 fill 画完
+    const pitCount = Math.min(110, Math.floor((b - a) / 42));
+    ctx.beginPath();
+    for (let i = 0; i < pitCount; i++) {
+      const px2 = a + hash(o.seed + i * 1.73) * (b - a);
+      const py2 = o.y - o.cr * 0.82 + hash(o.seed + i * 3.11) * o.cr * 1.7;
+      const pr2 = 1.1 + hash(o.seed + i * 5.9) * 2.4;
+      ctx.moveTo(px2 + pr2, py2);
+      ctx.arc(px2, py2, pr2, 0, TAU);
+    }
+    ctx.fillStyle = hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 10), 0.34);
+    ctx.fill();
+
+    // 底面压暗，让岩体有"厚度"
+    const shadow = ctx.createLinearGradient(0, o.y + o.cr * 0.2, 0, o.y + o.cr);
+    shadow.addColorStop(0, hsl(tint.hue, tint.sat, tint.lit - 4, 0));
+    shadow.addColorStop(1, hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 12), 0.55));
+    ctx.fillStyle = shadow;
+    ctx.fillRect(a, o.y + o.cr * 0.2, b - a, o.cr * 0.9);
+
+    ctx.restore();
+
+    // 裙摆：从底边往下渐隐。有这条，岩台就不会像一个"上下都有边"的漂浮板块。
+    const skirtH = o.cr * 2.4;
+    const skirt = ctx.createLinearGradient(0, o.y + o.cr * 0.3, 0, o.y + o.cr + skirtH);
+    skirt.addColorStop(0, hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 6), 0.85));
+    skirt.addColorStop(0.45, hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 10), 0.5));
+    skirt.addColorStop(1, hsl(tint.hue, tint.sat, Math.max(2, tint.lit - 14), 0));
+    ctx.beginPath();
+    ctx.moveTo(a, o.y + o.cr * 0.5);
+    for (let x = a + step; x < b; x += step) ctx.lineTo(x, yb(x));
+    ctx.lineTo(b, o.y + o.cr * 0.5);
+    ctx.lineTo(b, o.y + o.cr + skirtH);
+    ctx.lineTo(a, o.y + o.cr + skirtH);
+    ctx.closePath();
+    ctx.fillStyle = skirt;
+    ctx.fill();
+
+    // 嵌在顶面的碎石，打断那条直线
+    const bumpCount = Math.max(3, Math.floor((b - a) / 95));
+    for (let i = 0; i < bumpCount; i++) {
+      const rx = a + ((i + 0.5) / bumpCount) * (b - a) + (hash(o.seed + i * 3.7) - 0.5) * 34;
+      const rr = 6 + hash(o.seed + i * 5.1) * 11;
+      ctx.beginPath();
+      ctx.ellipse(rx, yt(rx) + rr * 0.35, rr * 1.35, rr * 0.7, 0, 0, TAU);
+      ctx.fillStyle = hsl(tint.hue, tint.sat + 2, tint.lit + 5, 0.9);
+      ctx.fill();
     }
   }
 
@@ -265,6 +312,21 @@ function rockShape(cx, cy, r0, seed, tint) {
       ctx.lineWidth = Math.max(1, r0 * 0.022);
       ctx.stroke();
     }
+
+    // 颗粒感：小凹坑，一次 fill
+    const pits = Math.min(48, Math.round(r0 * 0.55));
+    ctx.beginPath();
+    for (let i = 0; i < pits; i++) {
+      const a2 = hash(seed + i * 1.31) * TAU * 4;
+      const d2 = Math.sqrt(hash(seed + i * 2.77)) * r0 * 0.86;
+      const px2 = cx + Math.cos(a2) * d2;
+      const py2 = cy + Math.sin(a2) * d2;
+      const pr2 = Math.max(0.8, 0.8 + hash(seed + i * 5.13) * r0 * 0.035);
+      ctx.moveTo(px2 + pr2, py2);
+      ctx.arc(px2, py2, pr2, 0, TAU);
+    }
+    ctx.fillStyle = hsl(tint.hue, tint.sat - 2, Math.max(3, tint.lit - 9), 0.32);
+    ctx.fill();
     ctx.restore();
   }
 

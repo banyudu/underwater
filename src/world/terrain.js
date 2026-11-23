@@ -17,7 +17,7 @@ import { viewHW, viewHH } from '../systems/view.js';
 const SHELF_BASE = 330;        // 第一条岩台的深度
 const SHELF_STEP = 780;        // 岩台之间的竖向间距
 const SHELF_SPAN = 5200;       // 岩台横向跨度（超出两端就是开阔水，可以绕过去）
-const SHELF_THICK = 128;       // 基准厚度
+const SHELF_THICK = 180;       // 基准厚度（太薄会变成上下都有边的漂浮板）
 const CREVICE_GAP = 76;        // 裂缝宽度：小的能钻，大的进不来
 
 const shelfCache = new Map();
@@ -81,7 +81,7 @@ export function shelfAt(n) {
     return null;
   }
 
-  const thick = SHELF_THICK * (0.75 + hash(s + 1) * 0.55);
+  const thick = SHELF_THICK * (0.8 + hash(s + 1) * 0.45);
   const cr = thick * 0.5;
 
   // 缺口：2~4 个
@@ -114,7 +114,7 @@ export function shelfAt(n) {
   const parts = [];
   for (const [a, b] of merged) {
     const span = b - a;
-    const count = Math.max(1, Math.ceil(span / (cr * 1.4)));
+    const count = Math.max(1, Math.ceil(span / (cr * 1.05)));
     for (let i = 0; i <= count; i++) {
       parts.push({ x: a + (span * i) / count, y, r: cr });
     }
@@ -268,7 +268,7 @@ export function collideTerrain(px, py, pr) {
   let hit = false;
   OUT.x = px; OUT.y = py;
 
-  for (let pass = 0; pass < 6; pass++) {
+  for (let pass = 0; pass < 9; pass++) {
     let moved = false;
     for (const o of world.terrain) {
       if (OUT.x < o.minX - pr || OUT.x > o.maxX + pr) continue;
@@ -321,6 +321,40 @@ export function slideAgainstTerrain(obj, radius) {
     if (vn < 0) { obj.vx -= vn * nx; obj.vy -= vn * ny; }
   }
   return true;
+}
+
+/* ---------------- 视线遮挡 ---------------- */
+
+const LOS_CAND = [];
+
+/**
+ * 两点之间的连线是否被地形挡住。
+ * 用来做"躲到石头后面，猎手就看不见你"。
+ * 先按线段 AABB 筛掉不相交的地形，再沿线段采样几个点做圆内测试。
+ */
+export function terrainBlocksLine(x1, y1, x2, y2, samples = 7) {
+  LOS_CAND.length = 0;
+  const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+  const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+
+  for (const o of world.terrain) {
+    if (o.maxX < minX || o.minX > maxX || o.maxY < minY || o.minY > maxY) continue;
+    LOS_CAND.push(o);
+  }
+  if (LOS_CAND.length === 0) return false;
+
+  for (let i = 1; i < samples; i++) {
+    const t = i / samples;
+    const px = x1 + (x2 - x1) * t;
+    const py = y1 + (y2 - y1) * t;
+    for (const o of LOS_CAND) {
+      for (const c of o.parts) {
+        const dx = px - c.x, dy = py - c.y;
+        if (dx * dx + dy * dy < c.r * c.r) return true;
+      }
+    }
+  }
+  return false;
 }
 
 /* ---------------- 按视野加载/卸载 ---------------- */

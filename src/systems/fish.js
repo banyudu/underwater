@@ -6,7 +6,7 @@ import { lerp } from '../core/math.js';
 import { world, depthM } from '../world/world.js';
 import { addFish, fishTarget } from '../world/spawn.js';
 import { viewHW, viewHH } from './view.js';
-import { slideAgainstTerrain } from '../world/terrain.js';
+import { slideAgainstTerrain, terrainBlocksLine } from '../world/terrain.js';
 
 export function updateFish(dt) {
   const { fishes, player, cam } = world;
@@ -43,12 +43,22 @@ export function updateFish(dt) {
       f.hunt = 0;
     }
 
+    // 想追 + 真的看得见，才会进入追击。
+    // 视线被岩石挡住时猎手"感知不到"玩家，会退回巡游——这是躲石头后面的意义。
+    let chasing = false;
     if (hunting && isPred && f.calm <= 0 && hunters < maxHunters
         && dist < huntRadius && f.giveup <= 0) {
+      if (!terrainBlocksLine(f.x, f.y, px, py)) chasing = true;
+      else f.hunt = Math.max(0, f.hunt - dt * 3);
+    }
+
+    if (chasing) {
       hunters++;
-      const lead = 0.16;
-      const tx = px + player.vx * lead - f.x;
-      const ty = py + player.vy * lead - f.y;
+      // 拦截预判：按"飞到预定位置需要多久"提前量，而不是固定 0.16s
+      const closing = Math.max(70, spd * huntMul);
+      const tt = clamp(dist / closing, 0, 0.75);
+      const tx = px + player.vx * tt - f.x;
+      const ty = py + player.vy * tt - f.y;
       const m = Math.hypot(tx, ty) || 1;
       ax = tx / m; ay = ty / m;
       spd *= huntMul;
@@ -93,7 +103,8 @@ export function updateFish(dt) {
       f.danger = 1;
     }
 
-    const k = 1 - Math.exp(-1.9 * dt);
+    // 追击时转向要更快，否则绕着玩家兜大圈、抓不到人
+    const k = 1 - Math.exp(-(chasing ? 3.6 : 1.9) * dt);
     f.vx += (ax * spd - f.vx) * k;
     f.vy += (ay * spd - f.vy) * k;
     f.vy += Math.sin(world.time * 0.5 + f.seed) * 3 * dt;

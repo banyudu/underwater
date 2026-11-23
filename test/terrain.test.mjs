@@ -239,7 +239,7 @@ test('沿着岩台往下潜，总能穿过缺口继续下潜', () => {
         tx = bestGap.x;
         ty = world.player.y + 60;
       } else {
-        ty = shelfInWay.y + 260;
+        ty = shelfInWay.y + shelfInWay.cr + 140;
       }
     }
 
