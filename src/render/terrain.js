@@ -64,6 +64,107 @@ function drawShelfKelp(o) {
   ctx.fill();
 }
 
+/** 单株附着物，画在原点。调用方负责 translate / rotate。 */
+function coralItem(kind, size, hue, ph, t) {
+  if (kind === 'fan') {
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(-size * 0.9, -size * 0.7, -size * 0.35, -size * 1.15);
+    ctx.quadraticCurveTo(0, -size * 1.3, size * 0.35, -size * 1.15);
+    ctx.quadraticCurveTo(size * 0.9, -size * 0.7, 0, 0);
+    ctx.closePath();
+    ctx.fillStyle = hsl(hue, 62, 58, 0.72);
+    ctx.fill();
+    ctx.strokeStyle = hsl(hue, 70, 76, 0.5);
+    ctx.lineWidth = Math.max(0.8, size * 0.05);
+    ctx.stroke();
+    return;
+  }
+
+  if (kind === 'tube') {
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+      const ox = (i - 1) * size * 0.46;
+      const h = size * (0.95 + 0.4 * Math.sin(i * 2.1 + ph));
+      const w = size * 0.17;
+      ctx.moveTo(ox - w * 1.15, 0);
+      ctx.quadraticCurveTo(ox - w * 0.72, -h * 0.6, ox - w * 0.62, -h);
+      ctx.quadraticCurveTo(ox, -h - w * 0.7, ox + w * 0.62, -h);
+      ctx.quadraticCurveTo(ox + w * 0.72, -h * 0.6, ox + w * 1.15, 0);
+      ctx.closePath();
+    }
+    ctx.fillStyle = hsl(hue, 60, 62, 0.7);
+    ctx.fill();
+    ctx.fillStyle = hsl(hue, 78, 82, 0.55);
+    for (let i = 0; i < 3; i++) {
+      const ox = (i - 1) * size * 0.46;
+      const h = size * (0.95 + 0.4 * Math.sin(i * 2.1 + ph));
+      ctx.beginPath();
+      ctx.ellipse(ox, -h - size * 0.02, size * 0.13, size * 0.055, 0, 0, TAU);
+      ctx.fill();
+    }
+    return;
+  }
+
+  if (kind === 'anemone') {
+    ctx.beginPath();
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * TAU;
+      const len = size * (0.8 + 0.25 * Math.sin(i * 2.3 + ph));
+      const tipSway = Math.sin(t * 1.6 + ph + i) * size * 0.18;
+      ctx.moveTo(Math.cos(a) * size * 0.16, -size * 0.14);
+      ctx.quadraticCurveTo(Math.cos(a) * len * 0.6, -len * 0.7, Math.cos(a) * len * 0.5 + tipSway, -len);
+    }
+    ctx.strokeStyle = hsl(hue, 72, 64, 0.8);
+    ctx.lineWidth = Math.max(1, size * 0.13);
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, size * 0.44, size * 0.19, 0, 0, TAU);
+    ctx.fillStyle = hsl(hue, 64, 44, 0.9);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, -size * 0.16, size * 0.22, 0, TAU);
+    ctx.fillStyle = hsl(hue, 80, 74, 0.55);
+    ctx.fill();
+    return;
+  }
+
+  if (kind === 'star') {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + (i / 10) * TAU;
+      const rr = i % 2 === 0 ? size : size * 0.4;
+      const px = Math.cos(a) * rr;
+      const py = Math.sin(a) * rr * 0.55;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = hsl(hue, 72, 58, 0.85);
+    ctx.fill();
+    ctx.strokeStyle = hsl(hue, 60, 40, 0.5);
+    ctx.lineWidth = Math.max(0.6, size * 0.05);
+    ctx.stroke();
+    return;
+  }
+
+  // 海胆
+  ctx.beginPath();
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * TAU + ph;
+    ctx.moveTo(Math.cos(a) * size * 0.3, Math.sin(a) * size * 0.3);
+    ctx.lineTo(Math.cos(a) * size * 0.95, Math.sin(a) * size * 0.95);
+  }
+  ctx.strokeStyle = hsl(hue, 38, 26, 0.85);
+  ctx.lineWidth = Math.max(0.7, size * 0.09);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(0, 0, size * 0.34, 0, TAU);
+  ctx.fillStyle = hsl(hue, 45, 22, 0.92);
+  ctx.fill();
+}
+
+/** 散点附着物：贴在真实轮廓上。 */
 function drawCoral(o) {
   const t = world.time;
   if (!o.coral || o.coral.length === 0) return;
@@ -75,109 +176,63 @@ function drawCoral(o) {
   for (const c of o.coral) {
     const x = o.x + c.ox;
     if (x < lo || x > hi) continue;
-    // 贴在真实表面上：用碰撞圆的并集上边界定位，所以不会浮在石头上方
+
     const env = envelopeAt(o, x);
     const y = (env ? env.top : o.y) + (c.oy || 0);
-
     const sway = Math.sin(t * 0.9 + c.ph) * c.size * 0.12;
 
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(sway * 0.1);
-
-    if (c.kind === 'fan') {
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.quadraticCurveTo(-c.size * 0.9, -c.size * 0.7, -c.size * 0.35, -c.size * 1.15);
-      ctx.quadraticCurveTo(0, -c.size * 1.3, c.size * 0.35, -c.size * 1.15);
-      ctx.quadraticCurveTo(c.size * 0.9, -c.size * 0.7, 0, 0);
-      ctx.closePath();
-      ctx.fillStyle = hsl(c.hue, 62, 58, 0.72);
-      ctx.fill();
-      ctx.strokeStyle = hsl(c.hue, 70, 76, 0.5);
-      ctx.lineWidth = Math.max(0.8, c.size * 0.05);
-      ctx.stroke();
-    } else if (c.kind === 'tube') {
-      ctx.beginPath();
-      for (let i = 0; i < 3; i++) {
-        const ox = (i - 1) * c.size * 0.46;
-        const h = c.size * (0.95 + 0.4 * Math.sin(i * 2.1 + c.ph));
-        const w = c.size * 0.17;
-        ctx.moveTo(ox - w * 1.15, 0);
-        ctx.quadraticCurveTo(ox - w * 0.72, -h * 0.6, ox - w * 0.62, -h);
-        ctx.quadraticCurveTo(ox, -h - w * 0.7, ox + w * 0.62, -h);
-        ctx.quadraticCurveTo(ox + w * 0.72, -h * 0.6, ox + w * 1.15, 0);
-        ctx.closePath();
-      }
-      ctx.fillStyle = hsl(c.hue, 60, 62, 0.7);
-      ctx.fill();
-      ctx.fillStyle = hsl(c.hue, 78, 82, 0.55);
-      for (let i = 0; i < 3; i++) {
-        const ox = (i - 1) * c.size * 0.46;
-        const h = c.size * (0.95 + 0.4 * Math.sin(i * 2.1 + c.ph));
-        ctx.beginPath();
-        ctx.ellipse(ox, -h - c.size * 0.02, c.size * 0.13, c.size * 0.055, 0, 0, TAU);
-        ctx.fill();
-      }
-    } else if (c.kind === 'anemone') {
-      // 海葵：底盘 + 一圈触手（触手随水流摆）
-      ctx.beginPath();
-      for (let i = 0; i < 7; i++) {
-        const a = (i / 7) * TAU;
-        const len = c.size * (0.8 + 0.25 * Math.sin(i * 2.3 + c.ph));
-        const tipSway = Math.sin(t * 1.6 + c.ph + i) * c.size * 0.18;
-        ctx.moveTo(Math.cos(a) * c.size * 0.16, -c.size * 0.14);
-        ctx.quadraticCurveTo(
-          Math.cos(a) * len * 0.6, -len * 0.7,
-          Math.cos(a) * len * 0.5 + tipSway, -len,
-        );
-      }
-      ctx.strokeStyle = hsl(c.hue, 72, 64, 0.8);
-      ctx.lineWidth = Math.max(1, c.size * 0.13);
-      ctx.lineCap = 'round';
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.ellipse(0, 0, c.size * 0.44, c.size * 0.19, 0, 0, TAU);
-      ctx.fillStyle = hsl(c.hue, 64, 44, 0.9);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(0, -c.size * 0.16, c.size * 0.22, 0, TAU);
-      ctx.fillStyle = hsl(c.hue, 80, 74, 0.55);
-      ctx.fill();
-    } else if (c.kind === 'star') {
-      // 海星：贴着表面的扁平五角星
-      ctx.beginPath();
-      for (let i = 0; i < 10; i++) {
-        const a = -Math.PI / 2 + (i / 10) * TAU;
-        const rr = i % 2 === 0 ? c.size : c.size * 0.4;
-        const px = Math.cos(a) * rr;
-        const py = Math.sin(a) * rr * 0.55;
-        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-      }
-      ctx.closePath();
-      ctx.fillStyle = hsl(c.hue, 72, 58, 0.85);
-      ctx.fill();
-      ctx.strokeStyle = hsl(c.hue, 60, 40, 0.5);
-      ctx.lineWidth = Math.max(0.6, c.size * 0.05);
-      ctx.stroke();
-    } else {
-      // 海胆：深色球 + 短刺
-      ctx.beginPath();
-      for (let i = 0; i < 12; i++) {
-        const a = (i / 12) * TAU + c.ph;
-        ctx.moveTo(Math.cos(a) * c.size * 0.3, Math.sin(a) * c.size * 0.3);
-        ctx.lineTo(Math.cos(a) * c.size * 0.95, Math.sin(a) * c.size * 0.95);
-      }
-      ctx.strokeStyle = hsl(c.hue, 38, 26, 0.85);
-      ctx.lineWidth = Math.max(0.7, c.size * 0.09);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(0, 0, c.size * 0.34, 0, TAU);
-      ctx.fillStyle = hsl(c.hue, 45, 22, 0.92);
-      ctx.fill();
-    }
-
+    coralItem(c.kind, c.size, c.hue, c.ph, t);
     ctx.restore();
+  }
+}
+
+/**
+ * 珊瑚礁块：一块深色瘤状基座 + 2~4 株较大的珊瑚。
+ * 散点珊瑚再多也是"点"，成丛才有体积，也是礁石表面最像戴夫的部分。
+ */
+function drawClumps(o) {
+  if (!o.clumps || o.clumps.length === 0) return;
+  const t = world.time;
+
+  const halfW = W / (2 * world.cam.z) * 1.12;
+  const lo = world.cam.x - halfW;
+  const hi = world.cam.x + halfW;
+
+  for (const c of o.clumps) {
+    const x = o.x + c.ox;
+    if (x < lo || x > hi) continue;
+
+    const env = envelopeAt(o, x);
+    const y = env ? env.top : o.y;
+
+    // 基座：一块比岩台略暗的瘤状凸起，而不是一块近黑色的椭圆（那样像水洼）
+    const tint = rockTint(o);
+    ctx.beginPath();
+    ctx.ellipse(x, y + c.size * 0.06, c.size * 0.96, c.size * 0.34, 0, 0, TAU);
+    ctx.fillStyle = hsl(tint.hue - 4, tint.sat, Math.max(6, tint.lit - 6), 0.95);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(x - c.size * 0.1, y - c.size * 0.04, c.size * 0.62, c.size * 0.22, 0, 0, TAU);
+    ctx.fillStyle = hsl(tint.hue - 2, tint.sat, Math.max(6, tint.lit - 2), 0.7);
+    ctx.fill();
+
+    // 成员：收紧在一起才像"一丛"，并让高矮错开
+    for (let i = 0; i < c.members; i++) {
+      const a = ((i + 0.5) / c.members) * Math.PI * 2 + c.ph;
+      const mx = x + Math.cos(a) * c.size * 0.3;
+      const my = y + Math.sin(a) * c.size * 0.1;
+      const sz = c.size * (0.5 + 0.5 * ((i * 37 % 10) / 10));
+      const sway = Math.sin(t * 0.8 + c.ph + i) * 0.08;
+
+      ctx.save();
+      ctx.translate(mx, my);
+      ctx.rotate(sway);
+      coralItem(c.kind, sz, (c.hue + i * 12) % 360, c.ph + i, t);
+      ctx.restore();
+    }
   }
 }
 
@@ -381,6 +436,7 @@ function drawShelf(o) {
   }
 
   drawShelfKelp(o);
+  drawClumps(o);
   drawCoral(o);
 }
 

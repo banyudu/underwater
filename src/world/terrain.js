@@ -163,12 +163,31 @@ export function shelfAt(n) {
   // 所以这里 baseY 传相对值 (-cr + 4)，之后再整体平移到该段中心。
   shelf.x = 0;
   shelf.y = y;
+  // 散点附着物：留少量做点缀
   for (const [a, b] of merged) {
     if (b - a < 140) continue;
     const spread = b - a - 80;
-    const count = clamp(Math.floor(spread / 105), 3, 28);
+    const count = clamp(Math.floor(spread / 150), 2, 18);
     shelf.coral.push(...coralAt(s + a * 0.01, count, spread)
       .map(c => ({ ...c, ox: clamp(c.ox, -spread / 2, spread / 2) + (a + b) / 2 })));
+  }
+
+  // 珊瑚礁块：成丛生长，共享一块深色基座，比散点更有体积感
+  shelf.clumps = [];
+  for (const [a, b] of merged) {
+    if (b - a < 220) continue;
+    const n = clamp(Math.floor((b - a) / 300), 1, 7);
+    for (let i = 0; i < n; i++) {
+      const cs = s + a * 0.013 + i * 5.7;
+      shelf.clumps.push({
+        ox: lerp(a + 140, b - 140, hash(cs)),
+        size: 19 + hash(cs + 1) * 21,
+        hue: (hash(cs + 2) * 340 + 10) % 360,
+        kind: hash(cs + 3) < 0.55 ? 'fan' : 'tube',
+        members: 2 + Math.floor(hash(cs + 4) * 3),
+        ph: hash(cs + 5) * TAU,
+      });
+    }
   }
 
   /* --- 海藻：也长在岩台顶面上，浅水才有 --- */
