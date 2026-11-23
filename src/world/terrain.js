@@ -49,17 +49,24 @@ function finalize(o) {
   return o;
 }
 
-function coralAt(seed, spread, baseY) {
-  const n = 2 + Math.floor(hash(seed + 3) * 3);
+const CORAL_KINDS = ['fan', 'tube', 'anemone', 'star', 'urchin'];
+
+/**
+ * 附着物（珊瑚/海绵/海葵/海星/海胆）。
+ * ox 是相对物体中心的横向位置，oy 是相对"表面"的微小偏移——
+ * 具体贴在哪儿由渲染时按真实轮廓算，所以不会浮在石头上方。
+ */
+function coralAt(seed, count, spread) {
   const list = [];
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < count; i++) {
+    const r1 = hash(seed + 10 + i * 1.7);
     list.push({
-      ox: (hash(seed + 10 + i) - 0.5) * spread,
-      oy: baseY + (hash(seed + 20 + i) - 0.5) * 14,
-      size: 7 + hash(seed + 30 + i) * 9,
-      hue: (hash(seed + 40 + i) * 80 + 285) % 360,
-      kind: hash(seed + 50 + i) < 0.5 ? 'fan' : 'tube',
-      ph: hash(seed + 60 + i) * TAU,
+      ox: (hash(seed + 10 + i * 2.3) - 0.5) * spread,
+      oy: (hash(seed + 20 + i * 3.1) - 0.5) * 5,
+      size: 7 + hash(seed + 30 + i * 4.9) * 11,
+      hue: (hash(seed + 40 + i * 5.3) * 340 + 10) % 360,
+      kind: CORAL_KINDS[Math.floor(r1 * CORAL_KINDS.length) % CORAL_KINDS.length],
+      ph: hash(seed + 60 + i * 6.1) * TAU,
     });
   }
   return list;
@@ -157,9 +164,10 @@ export function shelfAt(n) {
   shelf.x = 0;
   shelf.y = y;
   for (const [a, b] of merged) {
-    if (b - a < 160) continue;
-    const spread = Math.min(b - a - 60, 900);
-    shelf.coral.push(...coralAt(s + a * 0.01, spread, -cr + 4)
+    if (b - a < 140) continue;
+    const spread = b - a - 80;
+    const count = clamp(Math.floor(spread / 105), 3, 28);
+    shelf.coral.push(...coralAt(s + a * 0.01, count, spread)
       .map(c => ({ ...c, ox: clamp(c.ox, -spread / 2, spread / 2) + (a + b) / 2 })));
   }
 
@@ -213,7 +221,7 @@ export function shelfAt(n) {
         seed: bs,
         hue: 200 + hash(bs + 4) * 12,
         lit: 27 + hash(bs + 5) * 9,
-        coral: coralAt(bs + 40, r * 1.2, -r * 0.55),
+        coral: coralAt(bs + 40, 3 + Math.floor(hash(bs + 41) * 4), r * 1.3),
       }));
     }
   }
@@ -239,7 +247,7 @@ export function shelfAt(n) {
       seed: s + 9,
       hue: 201 + hash(s + 11) * 10,
       lit: 26 + hash(s + 12) * 7,
-      coral: coralAt(s + 60, cr2 * 3.4, -cr2 * 1.5),
+      coral: coralAt(s + 60, 5, cr2 * 3.2),
     }));
   }
 
@@ -265,7 +273,7 @@ export function shelfAt(n) {
         seed: s + 16,
         hue: 34 + hash(s + 17) * 10,
         lit: 24 + hash(s + 18) * 6,
-        coral: coralAt(s + 70, len * 0.7, -hullR * 0.4),
+        coral: coralAt(s + 70, 6 + Math.floor(hash(s + 71) * 3), len * 0.8),
       });
     }
   }
