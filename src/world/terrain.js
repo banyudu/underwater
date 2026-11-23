@@ -120,6 +120,25 @@ export function shelfAt(n) {
     }
   }
 
+  // 悬突：从岩体上凸出来的岩块（上下都有）。
+  // 它们也进 parts，所以是实心的——视觉轮廓（并集外形）和碰撞天然一致。
+  // 位置离段两端留出距离，不会堵住缺口。
+  for (const [a, b] of merged) {
+    const n = 1 + Math.floor(hash(s + a * 0.019) * 3);
+    for (let i = 0; i < n; i++) {
+      const ks = s + a * 0.023 + i * 7.9;
+      const kr = cr * (0.45 + hash(ks) * 0.42);
+      if (b - a < kr * 3.2) continue;
+      const kx = lerp(a + kr * 1.6, b - kr * 1.6, hash(ks + 1));
+      const up = hash(ks + 2) < 0.58;
+      parts.push({
+        x: kx,
+        y: y + (up ? -cr * 0.52 : cr * 0.52),
+        r: kr,
+      });
+    }
+  }
+
   const shelf = finalize({
     kind: 'shelf',
     n, y, thick, cr,
