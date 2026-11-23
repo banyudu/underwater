@@ -385,42 +385,24 @@ function drawShelf(o) {
 
     ctx.restore();
 
-    // 裙摆：底部渐隐进深水，避免"上下都有边"的漂浮板观感
-    const skirtH = o.cr * 2.4;
-    const skirt = ctx.createLinearGradient(0, o.y + o.cr * 0.3, 0, o.y + o.cr + skirtH);
-    skirt.addColorStop(0, hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 6), 0.9));
-    skirt.addColorStop(0.5, hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 10), 0.55));
-    skirt.addColorStop(1, hsl(tint.hue, tint.sat, Math.max(2, tint.lit - 14), 0));
-    // 裙摆：不做梯形收窄（那会变成方桶），而是从底边垂下一些长短不一的岩齿，
-    // 让底边自然破碎、并逐渐淡出
+    // 底面的不规则岩瓣：作为不透明岩体的一部分画出来。
+    // 之前这里是一层半透明的"裙摆"+半透明三角齿，结果是一堆带直边的矩形暗块，
+    // 看着像奇怪的投影，而不是岩石。
     ctx.beginPath();
-    ctx.moveTo(botPts[0].x, botPts[0].y - o.cr * 0.15);
-    for (let i = 1; i < botPts.length; i++) ctx.lineTo(botPts[i].x, botPts[i].y - o.cr * 0.15);
-    ctx.lineTo(botPts[botPts.length - 1].x, o.y + o.cr + skirtH * 0.45);
-    ctx.lineTo(botPts[0].x, o.y + o.cr + skirtH * 0.45);
-    ctx.closePath();
-    ctx.fillStyle = skirt;
-    ctx.fill();
-
-    // 钟乳状岩齿：长短不一，破掉裙摆的直边
-    const toothCount = Math.max(4, Math.floor((b - a) / 120));
-    for (let i = 0; i < toothCount; i++) {
-      const tx = a + ((i + 0.5) / toothCount) * (b - a) + (hash(o.seed + i * 4.3) - 0.5) * 60;
-      const env = envelopeAt(o, tx);
-      if (!env) continue;
-      const tw = o.cr * (0.3 + hash(o.seed + i * 6.7) * 0.45);
-      const th = o.cr * (0.7 + hash(o.seed + i * 8.9) * 1.9);
-      const tg = ctx.createLinearGradient(0, env.bot, 0, env.bot + th);
-      tg.addColorStop(0, hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 7), 0.9));
-      tg.addColorStop(1, hsl(tint.hue, tint.sat, Math.max(2, tint.lit - 13), 0));
-      ctx.beginPath();
-      ctx.moveTo(tx - tw * 0.5, env.bot - 4);
-      ctx.lineTo(tx + (hash(o.seed + i * 2.1) - 0.5) * tw * 0.5, env.bot + th);
-      ctx.lineTo(tx + tw * 0.5, env.bot - 4);
-      ctx.closePath();
-      ctx.fillStyle = tg;
-      ctx.fill();
+    ctx.moveTo(botPts[0].x, botPts[0].y - o.cr * 0.05);
+    for (let i = 0; i < botPts.length; i++) {
+      const bp = botPts[i];
+      const lobe = Math.sin(bp.x * 0.017 + o.seed) * 0.55
+        + Math.sin(bp.x * 0.041 + o.seed * 2.3) * 0.35;
+      const drop = Math.max(0, lobe) * o.cr * 1.25;
+      ctx.lineTo(bp.x, bp.y + drop);
     }
+    for (let i = botPts.length - 1; i >= 0; i--) {
+      ctx.lineTo(botPts[i].x, botPts[i].y - o.cr * 0.05);
+    }
+    ctx.closePath();
+    ctx.fillStyle = hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 6), 0.97);
+    ctx.fill();
 
     // 顶面碎石
     const bumpCount = Math.max(3, Math.floor((x1 - x0) / 95));
