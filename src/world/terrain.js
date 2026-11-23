@@ -56,7 +56,7 @@ function coralAt(seed, spread, baseY) {
     list.push({
       ox: (hash(seed + 10 + i) - 0.5) * spread,
       oy: baseY + (hash(seed + 20 + i) - 0.5) * 14,
-      size: 9 + hash(seed + 30 + i) * 13,
+      size: 7 + hash(seed + 30 + i) * 9,
       hue: (hash(seed + 40 + i) * 80 + 285) % 360,
       kind: hash(seed + 50 + i) < 0.5 ? 'fan' : 'tube',
       ph: hash(seed + 60 + i) * TAU,
@@ -129,7 +129,7 @@ export function shelfAt(n) {
     parts,
     seed: s,
     hue: 202 + hash(s + 4) * 10,
-    lit: 16 + hash(s + 5) * 7,
+    lit: 25 + hash(s + 5) * 8,
     coral: [],
   });
 
@@ -193,7 +193,7 @@ export function shelfAt(n) {
         parts: bparts,
         seed: bs,
         hue: 200 + hash(bs + 4) * 12,
-        lit: 17 + hash(bs + 5) * 8,
+        lit: 27 + hash(bs + 5) * 9,
         coral: coralAt(bs + 40, r * 1.2, -r * 0.55),
       }));
     }
@@ -219,7 +219,7 @@ export function shelfAt(n) {
       gap: CREVICE_GAP,
       seed: s + 9,
       hue: 201 + hash(s + 11) * 10,
-      lit: 15 + hash(s + 12) * 6,
+      lit: 26 + hash(s + 12) * 7,
       coral: coralAt(s + 60, cr2 * 3.4, -cr2 * 1.5),
     }));
   }
@@ -245,7 +245,7 @@ export function shelfAt(n) {
         parts: wparts, len, tilt, hullR,
         seed: s + 16,
         hue: 34 + hash(s + 17) * 10,
-        lit: 16 + hash(s + 18) * 6,
+        lit: 24 + hash(s + 18) * 6,
         coral: coralAt(s + 70, len * 0.7, -hullR * 0.4),
       });
     }
