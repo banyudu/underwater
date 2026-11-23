@@ -369,6 +369,19 @@ export function slideAgainstTerrain(obj, radius) {
   return true;
 }
 
+/** 某个点是否在岩石内部（给气泡/雪粒做遮挡用）。 */
+export function terrainContains(x, y, pad = 0) {
+  for (const o of world.terrain) {
+    if (x + pad < o.minX || x - pad > o.maxX || y + pad < o.minY || y - pad > o.maxY) continue;
+    for (const c of o.parts) {
+      const dx = x - c.x, dy = y - c.y;
+      const rr = c.r + pad;
+      if (dx * dx + dy * dy < rr * rr) return true;
+    }
+  }
+  return false;
+}
+
 /* ---------------- 视线遮挡 ---------------- */
 
 const LOS_CAND = [];

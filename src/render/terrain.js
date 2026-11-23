@@ -6,7 +6,7 @@
 
 import { TAU, clamp, hsl, hash } from '../core/math.js';
 import { ctx, W, H } from '../core/viewport.js';
-import { world, depthM } from '../world/world.js';
+import { world } from '../world/world.js';
 
 /** 岩台在 x 处的真实上下边界：碰撞圆的并集外形。
  *  这样"看得见的形状"和"撞得到的形状"完全一致，而且天然带扇贝状的凹凸。 */
@@ -327,10 +327,10 @@ function drawShelf(o) {
     for (let k = 0; k < layerCount; k++) {
       const y0 = bandTop + bandH * (k / layerCount);
       const y1 = bandTop + bandH * ((k + 1) / layerCount);
-      const dh = (hash(o.seed + k * 3.3) - 0.5) * 16;
-      const dl = (hash(o.seed + k * 5.7) - 0.5) * 7;
-      const ds = (hash(o.seed + k * 7.1) - 0.5) * 7;
-      ctx.fillStyle = hsl(tint.hue + dh, tint.sat + ds, tint.lit + dl, 0.5);
+      const dh = (hash(o.seed + k * 3.3) - 0.5) * 7;
+      const dl = (hash(o.seed + k * 5.7) - 0.5) * 3.5;
+      const ds = (hash(o.seed + k * 7.1) - 0.5) * 3;
+      ctx.fillStyle = hsl(tint.hue + dh, tint.sat + ds, tint.lit + dl, 0.3);
       ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
 
       // 层间暗缝，跟着轮廓走一点起伏
@@ -367,7 +367,7 @@ function drawShelf(o) {
       ctx.moveTo(px2 + pr2, py2);
       ctx.arc(px2, py2, pr2, 0, TAU);
     }
-    ctx.fillStyle = hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 10), 0.32);
+    ctx.fillStyle = hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 10), 0.2);
     ctx.fill();
 
     // 底部压暗
@@ -514,9 +514,9 @@ function rockShape(cx, cy, r0, seed, tint) {
     for (let k = 0; k < bands; k++) {
       const y0 = cy - r0 + (r0 * 2 / bands) * k;
       const y1 = cy - r0 + (r0 * 2 / bands) * (k + 1);
-      const dh = (hash(seed + k * 2.9) - 0.5) * 14;
-      const dl = (hash(seed + k * 4.3) - 0.5) * 6;
-      ctx.fillStyle = hsl(tint.hue + dh, tint.sat - 2, tint.lit + dl, 0.45);
+      const dh = (hash(seed + k * 2.9) - 0.5) * 7;
+      const dl = (hash(seed + k * 4.3) - 0.5) * 3;
+      ctx.fillStyle = hsl(tint.hue + dh, tint.sat - 2, tint.lit + dl, 0.28);
       ctx.fillRect(cx - r0, y0, r0 * 2, y1 - y0);
     }
     ctx.restore();
@@ -674,7 +674,9 @@ function drawWreck(o) {
 }
 
 export function drawTerrain() {
-  const deep = clamp((depthM() - 60) / 220, 0, 1);
+  // 这里曾经有一句 globalAlpha = 1 - deep*0.06，本意是让地形随深度淡入背景。
+  // 后果是背后那些会动的焦散光/光柱透过岩石，整块岩体看起来像蒙了一层来回流动的油。
+  // 深度的暗化交给 rockTint()，它是不透明的，不需要整体透明。
 
   // 屏幕裁剪：一次会加载 4~5 层岩台，每层好几块石头，
   // 不裁的话屏幕外的石头也在画，光这一项每帧就多一万次调用。
@@ -685,7 +687,6 @@ export function drawTerrain() {
   const visible = o => o.maxX > lo && o.minX < hi && o.maxY > top && o.minY < bot;
 
   ctx.save();
-  if (deep > 0.01) ctx.globalAlpha = 1 - deep * 0.06;
 
   for (const o of world.terrain) {
     if (o.kind === 'shelf' && visible(o)) drawShelf(o);

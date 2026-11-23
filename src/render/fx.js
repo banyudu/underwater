@@ -3,6 +3,7 @@
 import { TAU, clamp, lerp } from '../core/math.js';
 import { ctx } from '../core/viewport.js';
 import { world } from '../world/world.js';
+import { terrainContains } from '../world/terrain.js';
 
 export function drawFx() {
   const { rings, parts, bubbles, texts, cam } = world;
@@ -36,6 +37,9 @@ export function drawFx() {
   ctx.save();
   ctx.lineWidth = 1;
   for (const b of bubbles) {
+    // 气泡在岩石内部时不该画出来，否则会像一层流动的膜糊在岩面上
+    // pad 稍大：碰撞圆之间是凹谷，视觉填充却盖住了，不加 pad 会有气泡浮在岩面上
+    if (terrainContains(b.x, b.y, b.r * 0.6 + 14)) continue;
     ctx.beginPath();
     ctx.arc(b.x, b.y, b.r, 0, TAU);
     ctx.strokeStyle = `rgba(210,255,255,${0.38 * b.a})`;

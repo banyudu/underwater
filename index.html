@@ -1011,6 +1011,17 @@
     }
     return true;
   }
+  function terrainContains(x, y, pad = 0) {
+    for (const o of world.terrain) {
+      if (x + pad < o.minX || x - pad > o.maxX || y + pad < o.minY || y - pad > o.maxY) continue;
+      for (const c of o.parts) {
+        const dx = x - c.x, dy = y - c.y;
+        const rr = c.r + pad;
+        if (dx * dx + dy * dy < rr * rr) return true;
+      }
+    }
+    return false;
+  }
   var LOS_CAND = [];
   function terrainBlocksLine(x1, y1, x2, y2, samples = 7) {
     LOS_CAND.length = 0;
@@ -2555,10 +2566,10 @@
       for (let k = 0; k < layerCount; k++) {
         const y0 = bandTop + bandH * (k / layerCount);
         const y1 = bandTop + bandH * ((k + 1) / layerCount);
-        const dh = (hash(o.seed + k * 3.3) - 0.5) * 16;
-        const dl = (hash(o.seed + k * 5.7) - 0.5) * 7;
-        const ds = (hash(o.seed + k * 7.1) - 0.5) * 7;
-        ctx.fillStyle = hsl(tint.hue + dh, tint.sat + ds, tint.lit + dl, 0.5);
+        const dh = (hash(o.seed + k * 3.3) - 0.5) * 7;
+        const dl = (hash(o.seed + k * 5.7) - 0.5) * 3.5;
+        const ds = (hash(o.seed + k * 7.1) - 0.5) * 3;
+        ctx.fillStyle = hsl(tint.hue + dh, tint.sat + ds, tint.lit + dl, 0.3);
         ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
         ctx.beginPath();
         for (let x = x0; x <= x1; x += 40) {
@@ -2591,7 +2602,7 @@
         ctx.moveTo(px2 + pr2, py2);
         ctx.arc(px2, py2, pr2, 0, TAU);
       }
-      ctx.fillStyle = hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 10), 0.32);
+      ctx.fillStyle = hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 10), 0.2);
       ctx.fill();
       const shadow = ctx.createLinearGradient(0, o.y - o.cr * 0.1, 0, o.y + o.cr);
       shadow.addColorStop(0, hsl(tint.hue, tint.sat, tint.lit - 4, 0));
@@ -2705,9 +2716,9 @@
       for (let k = 0; k < bands; k++) {
         const y0 = cy - r0 + r0 * 2 / bands * k;
         const y1 = cy - r0 + r0 * 2 / bands * (k + 1);
-        const dh = (hash(seed + k * 2.9) - 0.5) * 14;
-        const dl = (hash(seed + k * 4.3) - 0.5) * 6;
-        ctx.fillStyle = hsl(tint.hue + dh, tint.sat - 2, tint.lit + dl, 0.45);
+        const dh = (hash(seed + k * 2.9) - 0.5) * 7;
+        const dl = (hash(seed + k * 4.3) - 0.5) * 3;
+        ctx.fillStyle = hsl(tint.hue + dh, tint.sat - 2, tint.lit + dl, 0.28);
         ctx.fillRect(cx - r0, y0, r0 * 2, y1 - y0);
       }
       ctx.restore();
@@ -2835,14 +2846,12 @@
     drawCoral(o);
   }
   function drawTerrain() {
-    const deep = clamp((depthM() - 60) / 220, 0, 1);
     const hw = W / (2 * world.cam.z) * 1.15;
     const hh = H / (2 * world.cam.z) * 1.15;
     const lo = world.cam.x - hw, hi = world.cam.x + hw;
     const top = world.cam.y - hh, bot = world.cam.y + hh;
     const visible = (o) => o.maxX > lo && o.minX < hi && o.maxY > top && o.minY < bot;
     ctx.save();
-    if (deep > 0.01) ctx.globalAlpha = 1 - deep * 0.06;
     for (const o of world.terrain) {
       if (o.kind === "shelf" && visible(o)) drawShelf(o);
     }
@@ -3375,6 +3384,7 @@
     ctx.save();
     ctx.lineWidth = 1;
     for (const b of bubbles) {
+      if (terrainContains(b.x, b.y, b.r * 0.6 + 14)) continue;
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.r, 0, TAU);
       ctx.strokeStyle = `rgba(210,255,255,${0.38 * b.a})`;
