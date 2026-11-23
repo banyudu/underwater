@@ -65,7 +65,15 @@ function drawShelfKelp(o) {
 }
 
 /** 单株附着物，画在原点。调用方负责 translate / rotate。 */
-function coralItem(kind, size, hue, ph, t) {
+/** 附着物的深度压暗系数：越深越暗、越灰，避免在深水里像霓虹灯一样跳出来。 */
+function coralDim(o) {
+  return clamp((o.y / 20 - 50) / 240, 0, 1) * 0.42;
+}
+
+function coralItem(kind, size, hue, ph, t, dim = 0) {
+  const L = v => Math.max(8, v - v * dim);
+  const S = v => Math.max(14, v - v * dim * 0.5);
+
   if (kind === 'fan') {
     ctx.beginPath();
     ctx.moveTo(0, 0);
@@ -73,9 +81,9 @@ function coralItem(kind, size, hue, ph, t) {
     ctx.quadraticCurveTo(0, -size * 1.3, size * 0.35, -size * 1.15);
     ctx.quadraticCurveTo(size * 0.9, -size * 0.7, 0, 0);
     ctx.closePath();
-    ctx.fillStyle = hsl(hue, 62, 58, 0.72);
+    ctx.fillStyle = hsl(hue, S(62), L(58), 0.72);
     ctx.fill();
-    ctx.strokeStyle = hsl(hue, 70, 76, 0.5);
+    ctx.strokeStyle = hsl(hue, S(70), L(76), 0.5);
     ctx.lineWidth = Math.max(0.8, size * 0.05);
     ctx.stroke();
     return;
@@ -93,9 +101,9 @@ function coralItem(kind, size, hue, ph, t) {
       ctx.quadraticCurveTo(ox + w * 0.72, -h * 0.6, ox + w * 1.15, 0);
       ctx.closePath();
     }
-    ctx.fillStyle = hsl(hue, 60, 62, 0.7);
+    ctx.fillStyle = hsl(hue, S(60), L(62), 0.7);
     ctx.fill();
-    ctx.fillStyle = hsl(hue, 78, 82, 0.55);
+    ctx.fillStyle = hsl(hue, S(78), L(82), 0.55);
     for (let i = 0; i < 3; i++) {
       const ox = (i - 1) * size * 0.46;
       const h = size * (0.95 + 0.4 * Math.sin(i * 2.1 + ph));
@@ -115,17 +123,17 @@ function coralItem(kind, size, hue, ph, t) {
       ctx.moveTo(Math.cos(a) * size * 0.16, -size * 0.14);
       ctx.quadraticCurveTo(Math.cos(a) * len * 0.6, -len * 0.7, Math.cos(a) * len * 0.5 + tipSway, -len);
     }
-    ctx.strokeStyle = hsl(hue, 72, 64, 0.8);
+    ctx.strokeStyle = hsl(hue, S(72), L(64), 0.8);
     ctx.lineWidth = Math.max(1, size * 0.13);
     ctx.lineCap = 'round';
     ctx.stroke();
     ctx.beginPath();
     ctx.ellipse(0, 0, size * 0.44, size * 0.19, 0, 0, TAU);
-    ctx.fillStyle = hsl(hue, 64, 44, 0.9);
+    ctx.fillStyle = hsl(hue, S(64), L(44), 0.9);
     ctx.fill();
     ctx.beginPath();
     ctx.arc(0, -size * 0.16, size * 0.22, 0, TAU);
-    ctx.fillStyle = hsl(hue, 80, 74, 0.55);
+    ctx.fillStyle = hsl(hue, S(80), L(74), 0.55);
     ctx.fill();
     return;
   }
@@ -140,9 +148,9 @@ function coralItem(kind, size, hue, ph, t) {
       if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
     ctx.closePath();
-    ctx.fillStyle = hsl(hue, 72, 58, 0.85);
+    ctx.fillStyle = hsl(hue, S(72), L(58), 0.85);
     ctx.fill();
-    ctx.strokeStyle = hsl(hue, 60, 40, 0.5);
+    ctx.strokeStyle = hsl(hue, S(60), L(40), 0.5);
     ctx.lineWidth = Math.max(0.6, size * 0.05);
     ctx.stroke();
     return;
@@ -155,12 +163,12 @@ function coralItem(kind, size, hue, ph, t) {
     ctx.moveTo(Math.cos(a) * size * 0.3, Math.sin(a) * size * 0.3);
     ctx.lineTo(Math.cos(a) * size * 0.95, Math.sin(a) * size * 0.95);
   }
-  ctx.strokeStyle = hsl(hue, 38, 26, 0.85);
+  ctx.strokeStyle = hsl(hue, S(38), L(26), 0.85);
   ctx.lineWidth = Math.max(0.7, size * 0.09);
   ctx.stroke();
   ctx.beginPath();
   ctx.arc(0, 0, size * 0.34, 0, TAU);
-  ctx.fillStyle = hsl(hue, 45, 22, 0.92);
+  ctx.fillStyle = hsl(hue, S(45), L(22), 0.92);
   ctx.fill();
 }
 
@@ -168,6 +176,7 @@ function coralItem(kind, size, hue, ph, t) {
 function drawCoral(o) {
   const t = world.time;
   if (!o.coral || o.coral.length === 0) return;
+  const dim = coralDim(o);
 
   const halfW = W / (2 * world.cam.z) * 1.12;
   const lo = world.cam.x - halfW;
@@ -184,7 +193,7 @@ function drawCoral(o) {
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(sway * 0.1);
-    coralItem(c.kind, c.size, c.hue, c.ph, t);
+    coralItem(c.kind, c.size, c.hue, c.ph, t, dim);
     ctx.restore();
   }
 }
@@ -196,6 +205,7 @@ function drawCoral(o) {
 function drawClumps(o) {
   if (!o.clumps || o.clumps.length === 0) return;
   const t = world.time;
+  const dim = coralDim(o);
 
   const halfW = W / (2 * world.cam.z) * 1.12;
   const lo = world.cam.x - halfW;
@@ -230,7 +240,7 @@ function drawClumps(o) {
       ctx.save();
       ctx.translate(mx, my);
       ctx.rotate(sway);
-      coralItem(c.kind, sz, (c.hue + i * 12) % 360, c.ph + i, t);
+      coralItem(c.kind, sz, (c.hue + i * 12) % 360, c.ph + i, t, dim);
       ctx.restore();
     }
   }
@@ -445,10 +455,11 @@ function rockReach(parts) {
 function rockTint(o) {
   const d = clamp((o.y / 20 - 30) / 260, 0, 1);
   return {
-    hue: o.hue + d * 16,          // 往蓝紫方向偏
-    sat: Math.max(8, 22 - d * 8),
-    // 保留下限：深水里岩石可以很暗，但不能黑成一片——否则棱面和层理全被吃掉
-    lit: Math.max(13, o.lit - d * 6),
+    hue: o.hue + d * 12,
+    sat: Math.max(9, 22 - d * 6),
+    // 深水里要保证岩石比水"亮一点点"，否则岩体和水融成一片，
+    // 上面的珊瑚看起来就像浮在空中。宁可偏亮也不要糊掉。
+    lit: Math.max(20, o.lit - d * 4),
   };
 }
 
