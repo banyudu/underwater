@@ -267,9 +267,14 @@ function drawShelf(o) {
     const x1 = Math.min(b + o.cr * 0.98, visR);
 
     // 采样并集轮廓
+    // 采样点锚在"世界坐标的固定倍数"上，而不是从 x0 起步：
+    // 否则镜头一动，采样相位就变，轮廓会有一两像素的抖动。
+    const sx0 = Math.floor(x0 / sampleStep) * sampleStep;
+    const sx1 = Math.ceil(x1 / sampleStep) * sampleStep;
+
     const topPts = [];
     const botPts = [];
-    for (let x = x0; x <= x1; x += sampleStep) {
+    for (let x = sx0; x <= sx1; x += sampleStep) {
       const env = envelopeAt(o, x);
       if (!env) continue;
       // 只向内做轻微扰动（不进碰撞范围），避免"看着没碰到却撞上了"
@@ -335,7 +340,7 @@ function drawShelf(o) {
 
       // 层间暗缝，跟着轮廓走一点起伏
       ctx.beginPath();
-      for (let x = x0; x <= x1; x += 40) {
+      for (let x = Math.floor(x0 / 40) * 40; x <= x1 + 40; x += 40) {
         const yy = y1 + Math.sin(x * 0.011 + o.seed + k * 1.9) * o.cr * 0.035;
         if (x <= x0 + 1) ctx.moveTo(x, yy); else ctx.lineTo(x, yy);
       }
@@ -349,8 +354,9 @@ function drawShelf(o) {
     for (let k = 0; k < 8; k++) {
       const baseY = o.y - o.cr * 0.7 + (o.cr * 1.5 / 8) * k
         + (hash(o.seed + k * 2.3) - 0.5) * o.cr * 0.07;
-      ctx.moveTo(x0, baseY);
-      for (let x = x0 + strataStep; x < x1; x += strataStep) {
+      const st0 = Math.floor(x0 / strataStep) * strataStep;
+      ctx.moveTo(st0, baseY);
+      for (let x = st0 + strataStep; x < x1 + strataStep; x += strataStep) {
         ctx.lineTo(x, baseY + Math.sin(x * 0.013 + o.seed + k * 1.3) * (1.4 + k * 0.5));
       }
     }
@@ -358,14 +364,21 @@ function drawShelf(o) {
     ctx.lineWidth = 1.1;
     ctx.stroke();
 
-    const pitCount = Math.min(90, Math.floor((x1 - x0) / 44));
+    // 颗粒按世界坐标的网格摆放。之前是 x0 + hash()*(x1-x0)：x0 跟着镜头走，
+    // 整片颗粒就在岩面上滑来滑去，看起来像一层胶质在流动。
+    const pitX = 46;
+    const pitY = 40;
     ctx.beginPath();
-    for (let i = 0; i < pitCount; i++) {
-      const px2 = x0 + hash(o.seed + i * 1.73) * (x1 - x0);
-      const py2 = o.y - o.cr * 1.1 + hash(o.seed + i * 3.11) * o.cr * 2.1;
-      const pr2 = 1 + hash(o.seed + i * 5.9) * 2.6;
-      ctx.moveTo(px2 + pr2, py2);
-      ctx.arc(px2, py2, pr2, 0, TAU);
+    for (let ix = Math.floor(x0 / pitX); ix <= Math.ceil(x1 / pitX); ix++) {
+      for (let iy = Math.floor((o.y - o.cr * 1.15) / pitY); iy <= Math.ceil((o.y + o.cr * 1.15) / pitY); iy++) {
+        const hs = o.seed + ix * 1.73 + iy * 13.11;
+        if (hash(hs) > 0.5) continue;
+        const px2 = ix * pitX + hash(hs + 1.1) * (pitX - 6) + 3;
+        const py2 = iy * pitY + hash(hs + 2.3) * (pitY - 6) + 3;
+        const pr2 = 1 + hash(hs + 3.7) * 2.6;
+        ctx.moveTo(px2 + pr2, py2);
+        ctx.arc(px2, py2, pr2, 0, TAU);
+      }
     }
     ctx.fillStyle = hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 10), 0.2);
     ctx.fill();
@@ -378,16 +391,18 @@ function drawShelf(o) {
     ctx.fillRect(x0, o.y - o.cr * 0.1, x1 - x0, o.cr * 1.1);
 
     // 岩缝：从顶面往下几道短裂纹
-    const crackCount = Math.max(2, Math.floor((x1 - x0) / 240));
+    const crackStep = 250;
     ctx.beginPath();
-    for (let i = 0; i < crackCount; i++) {
-      const cx2 = x0 + ((i + 0.5) / crackCount) * (x1 - x0) + (hash(o.seed + i * 6.1) - 0.5) * 80;
+    for (let i = Math.floor(x0 / crackStep); i <= Math.ceil(x1 / crackStep); i++) {
+      const cs = o.seed + i * 6.1;
+      if (hash(cs) > 0.55) continue;
+      const cx2 = i * crackStep + hash(cs + 1.7) * crackStep * 0.6;
       const env = envelopeAt(o, cx2);
       if (!env) continue;
       const cy2 = env.top;
-      const len = o.cr * (0.25 + hash(o.seed + i * 8.3) * 0.45);
+      const len = o.cr * (0.25 + hash(cs + 2.3) * 0.45);
       ctx.moveTo(cx2, cy2);
-      ctx.lineTo(cx2 + (hash(o.seed + i * 9.7) - 0.5) * 18, cy2 + len);
+      ctx.lineTo(cx2 + (hash(cs + 3.9) - 0.5) * 18, cy2 + len);
     }
     ctx.strokeStyle = hsl(tint.hue, tint.sat, Math.max(3, tint.lit - 12), 0.4);
     ctx.lineWidth = 1.3;
@@ -415,10 +430,13 @@ function drawShelf(o) {
     ctx.fill();
 
     // 顶面碎石
-    const bumpCount = Math.max(3, Math.floor((x1 - x0) / 95));
-    for (let i = 0; i < bumpCount; i++) {
-      const rx = x0 + ((i + 0.5) / bumpCount) * (x1 - x0) + (hash(o.seed + i * 3.7) - 0.5) * 30;
-      const rr = 5 + hash(o.seed + i * 5.1) * 10;
+    // 顶面碎石同样按世界网格摆放。它画在裁剪之外、会探出轮廓一点，
+    // 所以位置一滑，轮廓看起来就像"在向右长出来又缩回去"。
+    const bumpStep = 95;
+    for (let i = Math.floor(x0 / bumpStep); i <= Math.ceil(x1 / bumpStep); i++) {
+      const bs = o.seed + i * 3.7;
+      const rx = i * bumpStep + (hash(bs) - 0.5) * 30;
+      const rr = 5 + hash(bs + 1.3) * 10;
       const ty2 = shelfTopAt(o, rx);
       ctx.beginPath();
       ctx.ellipse(rx, ty2 + rr * 0.3, rr * 1.35, rr * 0.7, 0, 0, TAU);
