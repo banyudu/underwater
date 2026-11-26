@@ -5,6 +5,7 @@ import { PLAYER } from '../config/tuning.js';
 import { keys, pointer } from '../core/input.js';
 import { W, H } from '../core/viewport.js';
 import { world } from '../world/world.js';
+import { SITE } from '../world/terrain.js';
 import { addBubble } from '../world/fx.js';
 import { slideAgainstTerrain } from '../world/terrain.js';
 
@@ -58,7 +59,13 @@ export function updatePlayer(dt) {
   player.x += player.vx * dt;
   player.y += player.vy * dt;
 
-  if (player.y < 112) { player.y = 112; if (player.vy < 45) player.vy = 45; }
+  // 水面
+  if (player.y < SITE.top) { player.y = SITE.top; if (player.vy < 45) player.vy = 45; }
+  // 四壁与海底本身是实心的，正常不会越界。这里的夹取只是"防穿透"的最后保险，
+  // 所以必须落在岩壁/海底**外侧**——否则夹取会把人塞进岩石里，和碰撞互相打架。
+  if (player.x < SITE.left - 200) { player.x = SITE.left - 200; player.vx = Math.max(player.vx, 0); }
+  if (player.x > SITE.right + 200) { player.x = SITE.right + 200; player.vx = Math.min(player.vx, 0); }
+  if (player.y > SITE.bottom + 200) { player.y = SITE.bottom + 200; player.vy = Math.min(player.vy, 0); }
 
   // 撞地形：沿表面滑动，而不是被抵住。
   // 半径取 0.72 而不是外接圆：既能保留"小体型钻缝"的机制，

@@ -10,6 +10,8 @@ export function grow(amount) {
   const player = world.player;
   const damp = 1 - clamp((player.r - 16) / 140, 0, 0.9);
   player.r += Math.max(0, amount) * damp;
+  // 有限峡谷宽约 1200，玩家不该长到半屏大——否则会被岩台夹死。
+  player.r = Math.min(player.r, 130);
 }
 
 export function eatFish(f) {

@@ -3,13 +3,14 @@
 
 import { TAU, clamp, rand } from '../core/math.js';
 import { world, depthM } from './world.js';
+import { SITE } from './terrain.js';
 import { viewHW, viewHH, viewArea } from '../systems/view.js';
 
 const CRAB_MAX = 4;
 const TURTLE_MAX = 2;
 
 export function crabTarget() {
-  const rocks = world.terrain.filter(o => o.kind === 'boulder').length;
+  const rocks = world.terrain.filter(o => o.crabHost).length;
   return clamp(Math.round(Math.min(rocks, viewArea() / 400000)), 0, CRAB_MAX);
 }
 export function turtleTarget() { return clamp(Math.round(viewArea() / 1200000), 0, TURTLE_MAX); }
@@ -30,7 +31,7 @@ export function makeTurtle(init) {
   const hw = viewHW(), hh = viewHH();
   return {
     x: world.cam.x + (init ? rand(-hw * 0.9, hw * 0.9) : rand(-hw * 1.35, hw * 1.35)),
-    y: clamp(world.cam.y + rand(-hh * 0.8, hh * 0.8), 200, 30000),
+    y: clamp(world.cam.y + rand(-hh * 0.8, hh * 0.8), SITE.top + 60, SITE.bottom - 120),
     r: rand(26, 46),
     vx: rand(10, 22) * (Math.random() < 0.5 ? -1 : 1),
     vy: rand(-6, 6),
@@ -57,7 +58,7 @@ export function updateBenthos(dt) {
   if (crabs.length < want) {
     for (const o of terrain) {
       if (crabs.length >= want) break;
-      if (o.kind !== 'rock') continue;
+      if (!o.crabHost) continue;
       if (crabs.some(c => c.host === o)) continue;
       crabs.push(makeCrab(o));
     }
@@ -95,9 +96,9 @@ export function resetBenthos() {
 /** 螃蟹的世界坐标：贴在石头表面的上半弧上。 */
 export function crabPos(c) {
   const host = c.host;
-  const R = host.r * 0.78;
+  const R = host.cr * 0.78;
   return {
-    x: host.x + Math.cos(c.a) * R,
-    y: host.y + Math.sin(c.a) * R * 0.72 + host.r * 0.1,
+    x: host.cx + Math.cos(c.a) * R,
+    y: host.cy + Math.sin(c.a) * R * 0.72 + host.cr * 0.1,
   };
 }

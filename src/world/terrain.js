@@ -1,61 +1,204 @@
-// 地形：海底岩台（seabed shelves）。
+// 地形：有限潜点（bounded dive site）。
 //
-// 石头不会凭空悬在水里。地形是一层层横向的岩台，玩家沿着它们往下潜：
-//   - 岩台横跨一片区域，中间留缺口，玩家从缺口或岩台两端下潜
-//   - 石头、珊瑚、裂缝、沉船都长在岩台顶面上
-//   - 个别层是"空窗"（整层没有岩台），留出自由下潜的空间
+// 一张固定尺寸的潜点：左右岩壁 + 海底 + 从岩壁和海底长出来的岩台与石柱。
+// 所有岩体都"长"在壁或底上——这正是"石头不会悬在水里"的结构性保证，
+// 不再需要"每层留缺口"之类的规则去勉强合理化。
 //
-// 岩台按索引确定性生成（hash(n)），所以在世界坐标里是稳定的：
-// 游回去还是同一块岩台，不会因为回收/重生而跳变。
-//
-// 碰撞仍然是圆 vs 圆：每条岩台的实心段用一排圆填满。
+// 所有岩体统一表示成"一串圆"（union of circles）：
+//   - 碰撞：圆 vs 圆
+//   - 渲染：把同一批圆画进一条 path、一次 fill，得到天然融合的轮廓
+// 于是形状天然带扇贝状起伏，而且"看得见的形状 == 撞得到的形状"。
 
 import { TAU, clamp, hash, lerp } from '../core/math.js';
 import { world } from './world.js';
-import { viewHW, viewHH } from '../systems/view.js';
 
-const SHELF_BASE = 330;        // 第一条岩台的深度
-const SHELF_STEP = 780;        // 岩台之间的竖向间距
-const SHELF_SPAN = 5200;       // 岩台横向跨度（超出两端就是开阔水，可以绕过去）
-const SHELF_THICK = 180;       // 基准厚度（太薄会变成上下都有边的漂浮板）
-const CREVICE_GAP = 76;        // 裂缝宽度：小的能钻，大的进不来
+/** 潜点边界。整个地图就是这一块，玩家不能离开。 */
+export const SITE = {
+  left: -600,
+  right: 600,
+  top: 120,        // 水面下（玩家活动上界）
+  bottom: 3400,    // 海底（世界 y，约 170m）
+};
 
-const shelfCache = new Map();
+const WALL_R = 150;
+const FLOOR_R = 130;
+
+/* ---------------- 取形 ---------------- */
+
+/** 岩壁内表面的横向位置，随深度起伏 → 悬突与凹陷。 */
+function wallFace(y, side) {
+  const n = Math.sin(y * 0.0017) * 95
+    + Math.sin(y * 0.0049 + 1.9) * 42
+    + Math.sin(y * 0.0121 + 3.1) * 15;
+  const inward = Math.max(-30, n);
+  return side < 0 ? SITE.left + 100 + inward : SITE.right - 100 - inward;
+}
+
+/** 海底顶面高度。 */
+function floorTop(x) {
+  return SITE.bottom - 90
+    + Math.sin(x * 0.0021) * 55
+    + Math.sin(x * 0.0057 + 2.2) * 26;
+}
+
+/** 一组圆在某 x 处的上边界（供附着物定位）。 */
+function topAt(parts, x) {
+  let top = Infinity;
+  for (const c of parts) {
+    const dx = x - c.x;
+    if (dx <= -c.r || dx >= c.r) continue;
+    const dy = Math.sqrt(c.r * c.r - dx * dx);
+    if (c.y - dy < top) top = c.y - dy;
+  }
+  return top === Infinity ? null : top;
+}
+
+function makeMass(parts, shape, seed) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const c of parts) {
+    if (c.x - c.r < minX) minX = c.x - c.r;
+    if (c.x + c.r > maxX) maxX = c.x + c.r;
+    if (c.y - c.r < minY) minY = c.y - c.r;
+    if (c.y + c.r > maxY) maxY = c.y + c.r;
+  }
+  return {
+    kind: 'rock',
+    shape,
+    parts,
+    minX, minY, maxX, maxY,
+    x: (minX + maxX) / 2,
+    y: (minY + maxY) / 2,
+    seed,
+    hue: 202 + hash(seed) * 12,
+    lit: 25 + hash(seed + 1) * 8,
+    coral: [],
+    clumps: [],
+    kelp: [],
+  };
+}
 
 /* ---------------- 生成 ---------------- */
 
-function mergeIntervals(list) {
+function buildWalls() {
   const out = [];
-  for (const [a, b] of list) {
-    if (b - a < 8) continue;
-    if (out.length && a <= out[out.length - 1][1] + 4) {
-      out[out.length - 1][1] = Math.max(out[out.length - 1][1], b);
-    } else {
-      out.push([a, b]);
+  for (const side of [-1, 1]) {
+    const parts = [];
+    for (let y = SITE.top - 500; y <= SITE.bottom + 500; y += WALL_R * 0.62) {
+      const face = wallFace(y, side);
+      // 圆心退进壁里一个半径，于是内表面正好落在 face 上
+      parts.push({ x: face + side * WALL_R, y, r: WALL_R });
+      parts.push({ x: face + side * WALL_R * 2.05, y: y + WALL_R * 0.5, r: WALL_R * 0.92 });
     }
+    out.push(makeMass(parts, 'wall', side < 0 ? 11 : 23));
   }
   return out;
 }
 
-function finalize(o) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const c of o.parts) {
-    if (c.x - c.r < minX) minX = c.x - c.r;
-    if (c.y - c.r < minY) minY = c.y - c.r;
-    if (c.x + c.r > maxX) maxX = c.x + c.r;
-    if (c.y + c.r > maxY) maxY = c.y + c.r;
+function buildFloor() {
+  const parts = [];
+  for (let x = SITE.left - 600; x <= SITE.right + 600; x += FLOOR_R * 0.62) {
+    const top = floorTop(x);
+    parts.push({ x, y: top + FLOOR_R, r: FLOOR_R });
+    parts.push({ x: x + FLOOR_R * 0.5, y: top + FLOOR_R * 1.95, r: FLOOR_R * 0.9 });
   }
-  o.minX = minX; o.minY = minY; o.maxX = maxX; o.maxY = maxY;
-  return o;
+  return makeMass(parts, 'wide', 37);
 }
+
+/** 岩台：从某一侧岩壁横向伸出，长度/厚度/间距都不规则。 */
+function buildLedges() {
+  const out = [];
+  let y = SITE.top + 420;
+  let k = 0;
+  // 通道宽度：岩壁内表面之间的净空
+  const corridor = (SITE.right - 240) - (SITE.left + 240);
+
+  while (y < SITE.bottom - 700) {
+    k++;
+    const s = 100 + k * 7.31;
+    // 竖向间距不规则：240 ~ 620
+    y += 240 + hash(s) * 380;
+
+    // 左右交替偏多，但不严格交替
+    const side = (k % 2 === 0) === (hash(s + 1) < 0.7) ? -1 : 1;
+    const face = wallFace(y, side);
+    // 长度上限：留出一半通道，保证最大体型（直径 260）也过得去
+    const maxLen = corridor * 0.5;
+    const len = Math.min(maxLen, 200 + hash(s + 2) * 360);
+    const r = 68 + hash(s + 3) * 52;
+    const dir = side < 0 ? 1 : -1;
+    const parts = [];
+
+    for (let d = r * 0.5; d <= len; d += r * 0.62) {
+      const taper = 1 - 0.5 * (d / len);
+      parts.push({
+        x: face + dir * d,
+        y: y + Math.sin(d * 0.009 + s) * 7,
+        r: r * taper,
+      });
+    }
+    if (parts.length >= 2) out.push(makeMass(parts, 'wide', s));
+  }
+  return out;
+}
+
+/** 石柱：从海底竖起来。 */
+function buildPillars() {
+  const out = [];
+  const n = 5;
+  for (let i = 0; i < n; i++) {
+    const s = 400 + i * 31.7;
+    const x = lerp(SITE.left + 420, SITE.right - 420, hash(s));
+    const h = 320 + hash(s + 1) * 520;
+    const r = 58 + hash(s + 2) * 42;
+    const base = floorTop(x) + r * 0.3;
+    const parts = [];
+
+    for (let d = 0; d < h; d += r * 0.62) {
+      const taper = 1 - 0.4 * (d / h);
+      parts.push({
+        x: x + Math.sin(d * 0.007 + s) * 26,
+        y: base - d,
+        r: r * taper,
+      });
+    }
+    if (parts.length >= 2) out.push(makeMass(parts, 'wide', s + 9));
+  }
+  return out;
+}
+
+/** 海底与岩台上的散石（底部嵌进地面，不悬空）。 */
+function buildBoulders() {
+  const out = [];
+  for (let i = 0; i < 16; i++) {
+    const s = 700 + i * 17.3;
+    const x = lerp(SITE.left + 260, SITE.right - 260, hash(s));
+    const r = 38 + hash(s + 1) * 66;
+    const base = floorTop(x);
+    const parts = [{ x, y: base - r * 0.3, r }];
+
+    const extra = 1 + Math.floor(hash(s + 2) * 2);
+    for (let j = 0; j < extra; j++) {
+      parts.push({
+        x: x + (hash(s + 3 + j) - 0.5) * r * 1.5,
+        y: base - r * 0.25 - hash(s + 6 + j) * r * 0.6,
+        r: r * (0.45 + hash(s + 9 + j) * 0.3),
+      });
+    }
+    const m = makeMass(parts, 'wide', s);
+    // 螃蟹在石头上半弧爬行，需要单圆信息
+    m.crabHost = true;
+    m.cx = parts[0].x;
+    m.cy = parts[0].y;
+    m.cr = parts[0].r;
+    out.push(m);
+  }
+  return out;
+}
+
+/* ---------------- 附着物 ---------------- */
 
 const CORAL_KINDS = ['fan', 'tube', 'anemone', 'star', 'urchin'];
 
-/**
- * 附着物（珊瑚/海绵/海葵/海星/海胆）。
- * ox 是相对物体中心的横向位置，oy 是相对"表面"的微小偏移——
- * 具体贴在哪儿由渲染时按真实轮廓算，所以不会浮在石头上方。
- */
 function coralAt(seed, count, spread) {
   const list = [];
   for (let i = 0; i < count; i++) {
@@ -72,234 +215,62 @@ function coralAt(seed, count, spread) {
   return list;
 }
 
-/**
- * 第 n 条岩台。返回 null 表示这一层是空窗（没有任何地形）。
- * 结果按 n 缓存，保证同一层每次拿到的是同一份几何。
- */
-export function shelfAt(n) {
-  if (shelfCache.has(n)) return shelfCache.get(n);
+/** 在横向岩体的顶面铺附着物。位置按世界坐标，所以镜头移动时不会滑动。 */
+function decorate(m) {
+  if (m.shape !== 'wide') return;
+  const span = m.maxX - m.minX;
+  if (span < 80) return;
 
-  const s = n * 7.13 + 2.71;
-  const y = SHELF_BASE + n * SHELF_STEP + (hash(s) - 0.5) * 150;
-
-  // 空窗：整层没有岩台，让下潜节奏有变化
-  if (hash(s + 0.5) < 0.17) {
-    shelfCache.set(n, null);
-    return null;
-  }
-
-  const thick = SHELF_THICK * (0.8 + hash(s + 1) * 0.45);
-  const cr = thick * 0.5;
-
-  // 缺口：2~4 个
-  const gapCount = 2 + Math.floor(hash(s + 2) * 3);
-  const gaps = [];
-  // 缺口按槽位均分（每个槽一位 + 抖动），避免全挤在一侧导致下潜要横穿整屏
-  const slotWidth = (SHELF_SPAN * 0.88) / gapCount;
-  for (let k = 0; k < gapCount; k++) {
-    const slot = (k + 0.5) / gapCount - 0.5;               // -0.5 .. 0.5
-    const jitter = (hash(s + 10 + k) - 0.5) * slotWidth * 0.45;
-    gaps.push({
-      x: slot * SHELF_SPAN * 0.88 + jitter,
-      w: 205 + hash(s + 20 + k) * 105,
+  // 散点
+  const count = clamp(Math.floor(span / 150), 2, 16);
+  for (let i = 0; i < count; i++) {
+    const cs = m.seed + i * 3.7;
+    const ox = m.minX + 20 + hash(cs) * (span - 40);
+    if (topAt(m.parts, ox) === null) continue;
+    m.coral.push({
+      ox,
+      oy: (hash(cs + 4) - 0.5) * 5,
+      size: 7 + hash(cs + 5) * 11,
+      hue: (hash(cs + 6) * 340 + 10) % 360,
+      kind: CORAL_KINDS[Math.floor(hash(cs + 7) * CORAL_KINDS.length) % CORAL_KINDS.length],
+      ph: hash(cs + 8) * TAU,
     });
   }
-  gaps.sort((a, b) => a.x - b.x);
 
-  // 缺口之间的实心段
-  const solids = [];
-  let cursor = -SHELF_SPAN / 2;
-  for (const g of gaps) {
-    const left = g.x - g.w / 2;
-    if (left > cursor) solids.push([cursor, left]);
-    cursor = Math.max(cursor, g.x + g.w / 2);
-  }
-  if (cursor < SHELF_SPAN / 2) solids.push([cursor, SHELF_SPAN / 2]);
-
-  const merged = mergeIntervals(solids);
-
-  const parts = [];
-  for (const [a, b] of merged) {
-    const span = b - a;
-    const count = Math.max(1, Math.ceil(span / (cr * 1.05)));
-    for (let i = 0; i <= count; i++) {
-      parts.push({ x: a + (span * i) / count, y, r: cr });
-    }
+  // 珊瑚礁块（成丛）
+  const clumps = clamp(Math.floor(span / 340), 0, 6);
+  for (let i = 0; i < clumps; i++) {
+    const cs = m.seed + 50 + i * 5.7;
+    const ox = m.minX + 60 + hash(cs) * Math.max(10, span - 120);
+    if (topAt(m.parts, ox) === null) continue;
+    m.clumps.push({
+      ox,
+      size: 19 + hash(cs + 1) * 21,
+      hue: (hash(cs + 2) * 340 + 10) % 360,
+      kind: hash(cs + 3) < 0.55 ? 'fan' : 'tube',
+      members: 2 + Math.floor(hash(cs + 4) * 3),
+      ph: hash(cs + 5) * TAU,
+    });
   }
 
-  // 悬突：从岩体上凸出来的岩块（上下都有）。
-  // 它们也进 parts，所以是实心的——视觉轮廓（并集外形）和碰撞天然一致。
-  // 位置离段两端留出距离，不会堵住缺口。
-  for (const [a, b] of merged) {
-    const n = 1 + Math.floor(hash(s + a * 0.019) * 3);
-    for (let i = 0; i < n; i++) {
-      const ks = s + a * 0.023 + i * 7.9;
-      const kr = cr * (0.45 + hash(ks) * 0.42);
-      if (b - a < kr * 3.2) continue;
-      const kx = lerp(a + kr * 1.6, b - kr * 1.6, hash(ks + 1));
-      const up = hash(ks + 2) < 0.58;
-      parts.push({
-        x: kx,
-        y: y + (up ? -cr * 0.52 : cr * 0.52),
-        r: kr,
-      });
-    }
-  }
-
-  const shelf = finalize({
-    kind: 'shelf',
-    n, y, thick, cr,
-    x0: -SHELF_SPAN / 2, x1: SHELF_SPAN / 2,
-    solids: merged,
-    gaps,
-    parts,
-    seed: s,
-    hue: 202 + hash(s + 4) * 10,
-    lit: 25 + hash(s + 5) * 8,
-    coral: [],
-  });
-
-  // 顶面的珊瑚。坐标统一用"相对物体"的形式，
-  // 所以这里 baseY 传相对值 (-cr + 4)，之后再整体平移到该段中心。
-  shelf.x = 0;
-  shelf.y = y;
-  // 散点附着物：留少量做点缀
-  for (const [a, b] of merged) {
-    if (b - a < 140) continue;
-    const spread = b - a - 80;
-    const count = clamp(Math.floor(spread / 150), 2, 18);
-    shelf.coral.push(...coralAt(s + a * 0.01, count, spread)
-      .map(c => ({ ...c, ox: clamp(c.ox, -spread / 2, spread / 2) + (a + b) / 2 })));
-  }
-
-  // 珊瑚礁块：成丛生长，共享一块深色基座，比散点更有体积感
-  shelf.clumps = [];
-  for (const [a, b] of merged) {
-    if (b - a < 220) continue;
-    const n = clamp(Math.floor((b - a) / 300), 1, 7);
-    for (let i = 0; i < n; i++) {
-      const cs = s + a * 0.013 + i * 5.7;
-      shelf.clumps.push({
-        ox: lerp(a + 140, b - 140, hash(cs)),
-        size: 19 + hash(cs + 1) * 21,
-        hue: (hash(cs + 2) * 340 + 10) % 360,
-        kind: hash(cs + 3) < 0.55 ? 'fan' : 'tube',
-        members: 2 + Math.floor(hash(cs + 4) * 3),
-        ph: hash(cs + 5) * TAU,
-      });
-    }
-  }
-
-  /* --- 海藻：也长在岩台顶面上，浅水才有 --- */
-  const depthOfShelf = y / 20;
-  const kelpFade = clamp(1 - (depthOfShelf - 30) / 150, 0, 1);   // 30m 起变稀，180m 消失
-  shelf.kelp = [];
-  if (kelpFade > 0.05) {
-    for (const [a, b] of merged) {
-      for (let x = a + 40; x < b - 40; x += 46) {
-        const ks = s + x * 0.031;
-        if (hash(ks) > 0.82 * kelpFade) continue;
-        shelf.kelp.push({
+  // 海藻：只长在 180m 以上
+  const shallow = m.minY < SITE.bottom;
+  if (shallow) {
+    const fade = clamp(1 - (m.minY / 20 - 30) / 150, 0, 1);
+    if (fade > 0.05) {
+      for (let x = m.minX + 30; x < m.maxX - 30; x += 70) {
+        const ks = m.seed + x * 0.031;
+        if (hash(ks) > 0.6 * fade) continue;
+        if (topAt(m.parts, x) === null) continue;
+        m.kelp.push({
           ox: x,
-          h: (160 + hash(ks + 1) * 210) * (0.55 + kelpFade * 0.45),
+          h: (150 + hash(ks + 1) * 190) * (0.55 + fade * 0.45),
           w: 15 + hash(ks + 2) * 15,
           ph: hash(ks + 3) * TAU,
         });
       }
     }
   }
-
-  /* --- 石头：坐在岩台顶面上，绝不悬空 --- */
-  const boulders = [];
-  for (const [a, b] of merged) {
-    const width = b - a;
-    if (width < 220) continue;
-    const count = 1 + Math.floor(hash(s + a * 0.013) * 2);
-    for (let i = 0; i < count; i++) {
-      const bs = s + a * 0.017 + i * 9.1;
-      const r = 46 + hash(bs) * 58;
-      const cx = lerp(a + r * 1.1, b - r * 1.1, hash(bs + 1));
-      if (b - a < r * 2.6) continue;
-      // 圆心嵌进岩台一点，看起来是从海底长出来的
-      const by = y - cr - r * 0.32;
-      const bparts = [{ x: cx, y: by, r: r * 0.92 }];
-      const lump = 2 + Math.floor(hash(bs + 2) * 3);
-      for (let k = 0; k < lump; k++) {
-        const ang = hash(bs + 3 + k) * TAU;
-        const d = hash(bs + 8 + k) * r * 0.5;
-        bparts.push({
-          x: cx + Math.cos(ang) * d,
-          y: by + Math.sin(ang) * d * 0.6 - r * 0.15,
-          r: r * (0.4 + hash(bs + 14 + k) * 0.3),
-        });
-      }
-      boulders.push(finalize({
-        kind: 'boulder',
-        x: cx, y: by, r,
-        parts: bparts,
-        seed: bs,
-        hue: 200 + hash(bs + 4) * 12,
-        lit: 27 + hash(bs + 5) * 9,
-        coral: coralAt(bs + 40, 3 + Math.floor(hash(bs + 41) * 4), r * 1.3),
-      }));
-    }
-  }
-
-  /* --- 裂缝：两块石头夹一道缝，小的能钻、大的进不来 --- */
-  const creviceSeeds = merged.filter(([a, b]) => b - a > 420);
-  if (creviceSeeds.length && hash(s + 6) < 0.55) {
-    const [a, b] = creviceSeeds[Math.floor(hash(s + 7) * creviceSeeds.length)];
-    const cxc = lerp(a + 260, b - 260, hash(s + 8));
-    const cr2 = 54;
-    const cparts = [];
-    for (const side of [-1, 1]) {
-      const innerX = cxc + side * (CREVICE_GAP / 2 + cr2);
-      cparts.push({ x: innerX, y: y - cr2 * 0.9, r: cr2 });
-      cparts.push({ x: innerX + side * cr2 * 0.62, y: y - cr2 * 1.5, r: cr2 * 0.78 });
-      cparts.push({ x: innerX + side * cr2 * 0.5, y: y - cr2 * 0.25, r: cr2 * 0.72 });
-    }
-    boulders.push(finalize({
-      kind: 'crevice',
-      x: cxc, y: y - cr2 * 0.9, r: cr2 * 1.9,
-      parts: cparts,
-      gap: CREVICE_GAP,
-      seed: s + 9,
-      hue: 201 + hash(s + 11) * 10,
-      lit: 26 + hash(s + 12) * 7,
-      coral: coralAt(s + 60, 5, cr2 * 3.2),
-    }));
-  }
-
-  /* --- 沉船：稀有的海底地标，躺在岩台上 --- */
-  let wreck = null;
-  if (y > 1500 && hash(s + 13) < 0.3 && merged.length) {
-    const [a, b] = merged[0];
-    const len = 210 + hash(s + 14) * 90;
-    if (b - a > len * 1.3) {
-      const wx = (a + b) / 2;
-      const tilt = (hash(s + 15) - 0.5) * 0.5;
-      const hullR = len * 0.15;
-      const wy = y - cr - hullR * 0.5;
-      const wparts = [];
-      for (let i = 0; i < 4; i++) {
-        const tt = (i / 3 - 0.5) * len * 0.75;
-        wparts.push({ x: wx + Math.cos(tilt) * tt, y: wy + Math.sin(tilt) * tt, r: hullR * 0.95 });
-      }
-      wreck = finalize({
-        kind: 'wreck',
-        x: wx, y: wy, r: len * 0.5,
-        parts: wparts, len, tilt, hullR,
-        seed: s + 16,
-        hue: 34 + hash(s + 17) * 10,
-        lit: 24 + hash(s + 18) * 6,
-        coral: coralAt(s + 70, 6 + Math.floor(hash(s + 71) * 3), len * 0.8),
-      });
-    }
-  }
-
-  const result = { shelf, boulders, wreck };
-  shelfCache.set(n, result);
-  return result;
 }
 
 /* ---------------- 碰撞 ---------------- */
@@ -314,8 +285,14 @@ export function collideTerrain(px, py, pr) {
   let hit = false;
   OUT.x = px; OUT.y = py;
 
-  for (let pass = 0; pass < 9; pass++) {
-    let moved = false;
+  // 每轮只解析"穿透最深"的那一个圆，再重新评估。
+  // 密集排列的圆（岩壁、石柱）里如果每轮把所有穿透都推一遍，几个推力会互相抵消、
+  // 来回震荡；按最深优先逐个解析收敛得多。
+  for (let pass = 0; pass < 16; pass++) {
+    let best = null;
+    let bestPen = 0;
+    let bx = 0, by = 0, brr = 0;
+
     for (const o of world.terrain) {
       if (OUT.x < o.minX - pr || OUT.x > o.maxX + pr) continue;
       if (OUT.y < o.minY - pr || OUT.y > o.maxY + pr) continue;
@@ -326,22 +303,30 @@ export function collideTerrain(px, py, pr) {
         const d2 = dx * dx + dy * dy;
         if (d2 >= rr * rr) continue;
 
-        if (d2 < 1e-6) {
-          OUT.y -= rr;
-          moved = true; hit = true;
-          continue;
-        }
-
         const d = Math.sqrt(d2);
-        // +0.02：把物体放到表面稍微外侧。否则刚好贴在表面上时，
-        // 浮点误差会让下一次检测又判成"仍然碰撞"。
-        const push = (rr - d + 0.02) / d;
-        OUT.x += dx * push;
-        OUT.y += dy * push;
-        moved = true; hit = true;
+        const pen = rr - d;
+        if (pen > bestPen) {
+          bestPen = pen;
+          best = c;
+          bx = dx; by = dy; brr = rr;
+        }
       }
     }
-    if (!moved) break;
+
+    if (!best) break;
+    hit = true;
+
+    if (bx * bx + by * by < 1e-6) {
+      OUT.y -= brr;
+      continue;
+    }
+
+    const d = Math.sqrt(bx * bx + by * by);
+    // +0.02：把物体放到表面稍微外侧。否则刚好贴在表面上时，
+    // 浮点误差会让下一次检测又判成"仍然碰撞"。
+    const push = (brr - d + 0.02) / d;
+    OUT.x += bx * push;
+    OUT.y += by * push;
   }
 
   return hit ? OUT : null;
@@ -416,49 +401,28 @@ export function terrainBlocksLine(x1, y1, x2, y2, samples = 7) {
   return false;
 }
 
-/* ---------------- 按视野加载/卸载 ---------------- */
+/* ---------------- 生命周期 ---------------- */
 
-const loaded = new Set();
-
-export function updateTerrain() {
-  const { cam, terrain } = world;
-  const top = cam.y - viewHH() * 1.5;
-  const bottom = cam.y + viewHH() * 1.7;
-
-  const first = Math.floor((top - SHELF_BASE) / SHELF_STEP) - 1;
-  const last = Math.ceil((bottom - SHELF_BASE) / SHELF_STEP) + 1;
-
-  const want = new Set();
-  for (let n = first; n <= last; n++) want.add(n);
-
-  // 卸载不再需要的层
-  for (const o of terrain) {
-    if (o.shelfIndex !== undefined && !want.has(o.shelfIndex)) {
-      terrain.splice(terrain.indexOf(o), 1);
-    }
-  }
-
-  // 载入缺失的层（确定性生成 → 不会跳变）
-  for (const n of want) {
-    if (loaded.has(n)) continue;
-    loaded.add(n);
-    const data = shelfAt(n);
-    if (!data) continue;
-    data.shelf.shelfIndex = n;
-    terrain.push(data.shelf);
-    for (const b of data.boulders) { b.shelfIndex = n; terrain.push(b); }
-    if (data.wreck) { data.wreck.shelfIndex = n; terrain.push(data.wreck); }
-  }
-
-  for (const n of [...loaded]) {
-    if (!want.has(n)) loaded.delete(n);
-  }
-}
+/**
+ * 有限地图：整张潜点一次生成，不需要按视野加载/卸载。
+ * 保留这个导出是为了不动 main.js 的调用点。
+ */
+export function updateTerrain() {}
 
 export function resetTerrain() {
-  world.terrain.length = 0;
-  loaded.clear();
-  updateTerrain();
-}
+  const terrain = world.terrain;
+  terrain.length = 0;
 
-export { SHELF_STEP, SHELF_BASE, CREVICE_GAP };
+  const masses = [
+    ...buildWalls(),
+    buildFloor(),
+    ...buildLedges(),
+    ...buildPillars(),
+    ...buildBoulders(),
+  ];
+
+  for (const m of masses) {
+    decorate(m);
+    terrain.push(m);
+  }
+}

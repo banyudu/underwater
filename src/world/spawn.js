@@ -6,7 +6,7 @@ import { world, depthM } from './world.js';
 import { SPECS, FOOD_KEYS, DEEP_FOOD, PRED_KEYS, DEEP_PRED } from '../config/species.js';
 import { PREDATOR } from '../config/tuning.js';
 import { resetAmbient } from './ambient.js';
-import { resetTerrain } from './terrain.js';
+import { resetTerrain, SITE } from './terrain.js';
 import { resetBenthos } from './benthos.js';
 import { viewHW, viewHH, viewArea } from '../systems/view.js';
 
@@ -18,11 +18,25 @@ export function foodTarget() { return clamp(Math.round(viewArea() / 4200), 55, 1
 export function spawnPos(init, margin = 1.12) {
   const hw = viewHW(), hh = viewHH();
   if (init) {
-    return { x: world.cam.x + rand(-hw * 0.95, hw * 0.95), y: world.cam.y + rand(-hh * 0.95, hh * 0.95) };
+    return clampToSite(
+      world.cam.x + rand(-hw * 0.95, hw * 0.95),
+      world.cam.y + rand(-hh * 0.95, hh * 0.95),
+    );
   }
   const ang = rand(TAU);
   const m = rand(margin, margin + 0.26);
-  return { x: world.cam.x + Math.cos(ang) * hw * m, y: world.cam.y + Math.sin(ang) * hh * m };
+  return clampToSite(
+    world.cam.x + Math.cos(ang) * hw * m,
+    world.cam.y + Math.sin(ang) * hh * m,
+  );
+}
+
+/** 有限地图：所有生成点都要落在潜点范围内。 */
+function clampToSite(x, y) {
+  return {
+    x: clamp(x, SITE.left + 160, SITE.right - 160),
+    y: clamp(y, SITE.top + 40, SITE.bottom - 150),
+  };
 }
 
 /**
